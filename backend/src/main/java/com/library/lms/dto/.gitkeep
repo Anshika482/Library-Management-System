@@ -1,0 +1,1 @@
+Data Transfer Objects - request/response shapes, so entities are never exposed directly. Empty for now.

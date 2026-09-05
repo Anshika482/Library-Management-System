@@ -1,0 +1,23 @@
+# Maven build output
+target/
+
+# IDE files
+.idea/
+*.iml
+*.iws
+.vscode/
+.classpath
+.project
+.settings/
+bin/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Local secrets - never commit real credentials
+application-local.properties
+.env
