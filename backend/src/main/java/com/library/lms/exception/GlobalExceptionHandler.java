@@ -8,6 +8,7 @@ import org.springframework.context.MessageSourceResolvable;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
@@ -445,6 +446,67 @@ public class GlobalExceptionHandler {
                 LocalDateTime.now());
 
         return ResponseEntity.status(HttpStatus.CONFLICT).body(errorResponse);
+    }
+
+    /**
+     * Handles a login attempt whose credentials do not check out.
+     *
+     * <p>{@link AuthenticationException} is Spring Security's base type for
+     * every way authentication can fail, so this single handler covers a wrong
+     * password, an unknown account, a disabled account and the rest.</p>
+     *
+     * <p><b>401, not 500.</b> Without this handler the exception fell through
+     * to the catch-all below, and the API reported a server fault for what is
+     * an ordinary client outcome. 401 Unauthorized says the credentials were
+     * rejected, which is what actually happened.</p>
+     *
+     * <p><b>One message for every failure.</b> The text is fixed and says only
+     * that the pair was wrong. Separating "no such user" from "wrong password"
+     * would let an attacker confirm which accounts exist, one guess at a time,
+     * before trying a single password against them. The exception's own message
+     * is never read for the same reason: it can name the username and the
+     * reason, and neither belongs in a response.</p>
+     *
+     * @param exception the authentication failure, deliberately never read
+     * @return 401 with a message that reveals nothing about the account
+     */
+    /**
+     * Handles an authenticated caller reaching for data that is not theirs.
+     *
+     * <p><b>403, not 404.</b> The caller is known and their token is valid;
+     * what they lack is permission. 401 would wrongly suggest logging in again
+     * would help, and 404 would answer a different question than the one asked
+     * - and answering it would leak, because "no such user" and "not your user"
+     * must look identical from outside.</p>
+     *
+     * <p>The message is a fixed literal rather than the exception's own text.
+     * The exception already carries exactly this string, so today the two agree;
+     * hard-coding it here means that if someone later adds an id or a username
+     * to that exception for debugging, the detail still cannot reach a
+     * response.</p>
+     *
+     * @param exception the refusal, deliberately never read
+     * @return 403 with a message that describes nothing about the target
+     */
+    @ExceptionHandler(TransactionAccessDeniedException.class)
+    public ResponseEntity<ErrorResponse> handleTransactionAccessDenied(
+            TransactionAccessDeniedException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.FORBIDDEN.value(),
+                "Access denied",
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(errorResponse);
+    }
+
+    @ExceptionHandler(AuthenticationException.class)
+    public ResponseEntity<ErrorResponse> handleAuthenticationFailure(AuthenticationException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.UNAUTHORIZED.value(),
+                "Invalid username or password",
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(errorResponse);
     }
 
     /**

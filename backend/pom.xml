@@ -35,6 +35,9 @@
         -->
         <java.version>21</java.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+        <!-- One version for all three JJWT artifacts; they must always match. -->
+        <jjwt.version>0.13.0</jjwt.version>
     </properties>
 
     <dependencies>
@@ -69,6 +72,51 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!--
+            Spring Security: authentication and authorization for the whole
+            application. Adding the starter alone already changes runtime
+            behaviour, because Spring Boot auto configures a default filter
+            chain that demands a login for every endpoint and prints a
+            generated password to the console at startup. Nothing is configured
+            here yet, so that default is what applies until a SecurityConfig
+            is written in a later step.
+
+            No version tag: the Spring Boot parent picks the exact Spring
+            Security release it was built and tested against.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+
+        <!--
+            JJWT: creates and verifies JSON Web Tokens. Split across three
+            artifacts on purpose. Only jjwt-api is compiled against, so our code
+            depends on the interfaces and not on one particular implementation.
+            jjwt-impl and jjwt-jackson are runtime scope: the first is the engine
+            that does the signing, the second teaches it to read and write the
+            JSON payload using the Jackson library Spring Boot already ships.
+            Compiling against them would let an import of an internal class slip
+            in, which would break on the next upgrade.
+        -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+            <version>${jjwt.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+            <version>${jjwt.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
+            <version>${jjwt.version}</version>
+            <scope>runtime</scope>
         </dependency>
 
         <!--

@@ -4,6 +4,7 @@ import java.util.List;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -61,10 +62,11 @@ public class TransactionController {
      * the current state of the data will not allow it.</p>
      */
     @PostMapping("/issue")
-    public ResponseEntity<TransactionResponse> issueBook(@Valid @RequestBody IssueBookRequest issueBookRequest) {
+    public ResponseEntity<TransactionResponse> issueBook(@Valid @RequestBody IssueBookRequest issueBookRequest,
+            Authentication authentication) {
         TransactionResponse issuedTransaction = transactionService.issueBook(
                 issueBookRequest.getBookId(),
-                issueBookRequest.getUserId(),
+                authentication.getName(),
                 issueBookRequest.getDueDate());
 
         return ResponseEntity.status(HttpStatus.CREATED).body(issuedTransaction);
@@ -111,8 +113,10 @@ public class TransactionController {
      */
     @GetMapping("/{transactionId}")
     public ResponseEntity<TransactionResponse> getTransactionById(
-            @PathVariable @Positive(message = "Transaction id must be a positive number") Long transactionId) {
-        TransactionResponse transaction = transactionService.getTransactionById(transactionId);
+            @PathVariable @Positive(message = "Transaction id must be a positive number") Long transactionId,
+            Authentication authentication) {
+        TransactionResponse transaction =
+                transactionService.getTransactionById(transactionId, authentication.getName());
 
         return ResponseEntity.ok(transaction);
     }
@@ -141,8 +145,10 @@ public class TransactionController {
      */
     @GetMapping("/user/{userId}")
     public ResponseEntity<List<TransactionResponse>> getTransactionsByUser(
-            @PathVariable @Positive(message = "User id must be a positive number") Long userId) {
-        List<TransactionResponse> transactions = transactionService.getTransactionsByUser(userId);
+            @PathVariable @Positive(message = "User id must be a positive number") Long userId,
+            Authentication authentication) {
+        List<TransactionResponse> transactions =
+                transactionService.getTransactionsByUser(userId, authentication.getName());
 
         return ResponseEntity.ok(transactions);
     }

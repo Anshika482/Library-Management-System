@@ -2,18 +2,22 @@ package com.library.lms.service;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.library.lms.dto.TransactionResponse;
 import com.library.lms.entity.Book;
+import com.library.lms.entity.Role;
 import com.library.lms.entity.Transaction;
 import com.library.lms.entity.TransactionStatus;
 import com.library.lms.entity.User;
 import com.library.lms.exception.BookNotAvailableException;
 import com.library.lms.exception.BookNotFoundException;
 import com.library.lms.exception.ReturnBookNotAllowedException;
+import com.library.lms.exception.TransactionAccessDeniedException;
 import com.library.lms.exception.TransactionNotFoundException;
 import com.library.lms.exception.UserNotFoundException;
 import com.library.lms.repository.BookRepository;
@@ -73,21 +77,30 @@ public class TransactionService {
      * User holds a password hash, so handing the entity to a controller would
      * put credential material one Jackson call away from an HTTP response.</p>
      *
-     * @param bookId  the book to issue
-     * @param userId  who is borrowing it
-     * @param dueDate when it must come back, decided by the caller
+     * <p>The borrower is named by {@code username}, which callers must take from
+     * the authenticated principal and never from request input. The parameter is
+     * a login name rather than an id for exactly that reason: an id would invite
+     * a caller to supply one, and issuing a book to an account chosen by the
+     * requester is the flaw this signature exists to prevent.</p>
+     *
+     * @param bookId   the book to issue
+     * @param username the authenticated borrower's login name
+     * @param dueDate  when it must come back, decided by the caller
      * @return the saved loan, carrying the id the database generated
      * @throws BookNotFoundException     if no book has this id
-     * @throws UserNotFoundException     if no user has this id
+     * @throws UserNotFoundException     if no account has this login name
      * @throws BookNotAvailableException if every copy is already on loan
      */
     @Transactional
-    public TransactionResponse issueBook(Long bookId, Long userId, LocalDate dueDate) {
+    public TransactionResponse issueBook(Long bookId, String username, LocalDate dueDate) {
         Book book = bookRepository.findById(bookId)
                 .orElseThrow(() -> new BookNotFoundException(bookId));
 
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new UserNotFoundException(userId));
+        // Resolved from the authenticated name, never from anything the caller
+        // sent. The account is read again rather than trusted from the token,
+        // so a deleted or renamed user cannot still borrow on an old session.
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new UserNotFoundException(username));
 
         Integer availableCopies = book.getAvailableCopies();
 
@@ -190,18 +203,55 @@ public class TransactionService {
     }
 
     /**
-     * Fetches one loan by its id.
+     * Fetches one loan by its id, if the caller is entitled to see it.
      *
      * <p>Read-only, so no {@code @Transactional}: a single query needs no
      * transaction boundary, and adding one would imply this method writes.</p>
      *
-     * @throws TransactionNotFoundException if no transaction has this id
+     * <p>ADMIN and LIBRARIAN may read any loan and get the usual 404 for an id
+     * that is not there. A MEMBER may read only a loan whose borrower is their
+     * own account, decided by comparing database ids.</p>
+     *
+     * <p><b>A member is told the same thing either way.</b> An id that does not
+     * exist and an id belonging to someone else both raise
+     * {@link TransactionAccessDeniedException}. Splitting them into 404 and 403
+     * would make the endpoint enumerable: every 403 would confirm a real loan,
+     * and counting them would reveal how much the library lends. The row is read
+     * before the decision because ownership cannot be known without it, but
+     * nothing about a row they may not see reaches the caller.</p>
+     *
+     * @param transactionId         the loan wanted
+     * @param authenticatedUsername the caller's login name, which the caller must
+     *                              take from the authenticated principal
+     * @return the loan, mapped to a response
+     * @throws UserNotFoundException            if the authenticated name matches
+     *                                          no account
+     * @throws TransactionNotFoundException     if staff ask for an id that is not
+     *                                          there
+     * @throws TransactionAccessDeniedException if a member asks for a loan that
+     *                                          is not theirs, or one that does
+     *                                          not exist
      */
-    public TransactionResponse getTransactionById(Long transactionId) {
-        Transaction transaction = transactionRepository.findById(transactionId)
-                .orElseThrow(() -> new TransactionNotFoundException(transactionId));
+    public TransactionResponse getTransactionById(Long transactionId, String authenticatedUsername) {
+        User authenticatedUser = userRepository.findByUsername(authenticatedUsername)
+                .orElseThrow(() -> new UserNotFoundException(authenticatedUsername));
 
-        return toResponse(transaction);
+        Optional<Transaction> transaction = transactionRepository.findById(transactionId);
+
+        if (maySeeAnyUsersActivity(authenticatedUser)) {
+            return toResponse(transaction
+                    .orElseThrow(() -> new TransactionNotFoundException(transactionId)));
+        }
+
+        // A member gets one answer to two different questions. Returning 404 for
+        // an id that does not exist and 403 for one that belongs to somebody else
+        // would turn this endpoint into a directory: walk the ids, and every 403
+        // marks a real loan. Filtering to loans they own and refusing everything
+        // else makes the two cases indistinguishable from outside.
+        return toResponse(transaction
+                .filter(loan -> loan.getUser() != null
+                        && Objects.equals(loan.getUser().getId(), authenticatedUser.getId()))
+                .orElseThrow(TransactionAccessDeniedException::new));
     }
 
     /**
@@ -220,8 +270,64 @@ public class TransactionService {
                 .toList();
     }
 
-    /** Every loan belonging to one user, resolved the same way. */
-    public List<TransactionResponse> getTransactionsByUser(Long userId) {
+    /**
+     * Whether this account may read other people's borrowing activity.
+     *
+     * <p>Extracted so the two ownership checks in this class ask the same
+     * question of the same enum. Two copies of a rule like this drift: one gains
+     * a new role and the other quietly keeps refusing, or worse, quietly keeps
+     * allowing.</p>
+     *
+     * <p>Comparing the enum rather than a string means a renamed constant is a
+     * compile error instead of a silent mismatch. A null role, which the NOT
+     * NULL column should make impossible, falls through as false - the safe
+     * direction.</p>
+     *
+     * @param user the account asking
+     * @return true for ADMIN and LIBRARIAN, false for everyone else
+     */
+    private boolean maySeeAnyUsersActivity(User user) {
+        return user.getRole() == Role.ROLE_ADMIN || user.getRole() == Role.ROLE_LIBRARIAN;
+    }
+
+    /**
+     * Every loan belonging to one user, if the caller is entitled to see it.
+     *
+     * <p>The rule lives here rather than in the controller on purpose. A path
+     * variable is not proof of identity - a member can edit the id in the URL as
+     * easily as reading it - so the check has to sit where the data is fetched.
+     * Putting it in the controller would leave the method reachable, unguarded,
+     * by anything else that later calls the service.</p>
+     *
+     * <p>ADMIN and LIBRARIAN may read any history; a MEMBER may read only their
+     * own. Ownership is decided by comparing the requested id with the id of the
+     * account loaded from {@code authenticatedUsername}, so the caller supplies
+     * a name and the server supplies the id the name maps to.</p>
+     *
+     * @param userId                the account whose history is wanted
+     * @param authenticatedUsername the caller's login name, which the caller
+     *                              must take from the authenticated principal
+     * @return that user's loans, oldest first as the repository returns them
+     * @throws UserNotFoundException             if the authenticated name matches
+     *                                           no account
+     * @throws TransactionAccessDeniedException  if a member asks for someone
+     *                                           else's history
+     */
+    public List<TransactionResponse> getTransactionsByUser(Long userId, String authenticatedUsername) {
+        User authenticatedUser = userRepository.findByUsername(authenticatedUsername)
+                .orElseThrow(() -> new UserNotFoundException(authenticatedUsername));
+
+        // Staff see any history; a member sees only their own. The comparison is
+        // between the requested id and the id on the account the server just
+        // loaded - never the name in the URL, and never the name against an id.
+        if (!maySeeAnyUsersActivity(authenticatedUser)
+                && !Objects.equals(authenticatedUser.getId(), userId)) {
+            // Thrown before the rows are fetched, so a refused request never
+            // reads the data it was refused. Objects.equals rather than == so
+            // two equal Long ids above the cache range still compare equal.
+            throw new TransactionAccessDeniedException();
+        }
+
         return transactionRepository.findByUserId(userId)
                 .stream()
                 .map(this::toResponse)

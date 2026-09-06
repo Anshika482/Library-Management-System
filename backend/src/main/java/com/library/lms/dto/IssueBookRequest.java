@@ -14,14 +14,20 @@ import lombok.ToString;
 /**
  * What a client sends to borrow a book.
  *
- * <p>Three fields, and the list is as notable for what it leaves out. There is
+ * <p>Two fields, and the list is as notable for what it leaves out. There is
  * no {@code issueDate}, {@code status}, {@code returnDate} or {@code fineAmount}
  * here: those are decided by the service, not the caller. Accepting them would
- * let a client backdate a loan or declare a book already returned. The request
- * says who wants what and by when; everything else is the server's business.</p>
+ * let a client backdate a loan or declare a book already returned.</p>
+ *
+ * <p><b>There is no {@code userId} either, and that absence is the point.</b>
+ * The borrower used to be named in this body, which meant any authenticated
+ * caller could issue a book to somebody else simply by typing a different
+ * number. Who is borrowing is now taken from the authenticated principal, a
+ * value the server established itself and the client cannot influence. A field
+ * that must not be trusted is better removed than validated.</p>
  *
  * <p>Input only. It never travels back out, and it holds no entity - just the
- * two ids the service will resolve for itself.</p>
+ * book id the service will resolve for itself.</p>
  */
 @Getter
 @Setter
@@ -41,11 +47,6 @@ public class IssueBookRequest {
     @NotNull(message = "Book id is required")
     @Positive(message = "Book id must be a positive number")
     private Long bookId;
-
-    /** Who is borrowing it. Same reasoning as above. */
-    @NotNull(message = "User id is required")
-    @Positive(message = "User id must be a positive number")
-    private Long userId;
 
     /**
      * When the book must come back.
