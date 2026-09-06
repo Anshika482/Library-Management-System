@@ -6,9 +6,12 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
+import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
 import lombok.AllArgsConstructor;
@@ -94,6 +97,50 @@ public class User {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private Role role;
+
+    /**
+     * The library this account belongs to.
+     *
+     * <p>This is the tenant boundary. Once every account carries one, a member
+     * of one library will have no way to reach another library's books, members
+     * or loans, because every query will be scoped by this value rather than by
+     * anything the caller sends.</p>
+     *
+     * <p><b>Required.</b> The column arrived nullable because a NOT NULL
+     * column with no default cannot be added to a populated table under
+     * {@code STRICT_TRANS_TABLES}; the existing rows were then backfilled and
+     * the column tightened. Both sides now agree that every account belongs to
+     * a library.</p>
+     *
+     * <p>{@code optional = false} as well as {@code nullable = false}, because
+     * the two say different things. The {@code @JoinColumn} setting describes
+     * the column so schema generation gets it right; {@code optional} tells
+     * Hibernate the association is always present, which lets it plan an inner
+     * join instead of an outer one and lets it reject a user with no library
+     * before the statement reaches the database, rather than after it comes
+     * back as a constraint violation.</p>
+     *
+     * <p>{@code LAZY} rather than the default EAGER used elsewhere in this
+     * project. A user is loaded on every authenticated request; fetching the
+     * library row alongside it would double that work for the many requests
+     * that never look at it.</p>
+     *
+     * <p>{@code @ToString.Exclude} for the same reason the password hash is
+     * excluded, though the danger is different. With {@code open-in-view=false}
+     * the session closes at the end of the service layer, so a
+     * {@code toString()} on a detached User would try to initialise this proxy
+     * with nothing to initialise it from and throw
+     * {@code LazyInitializationException}. A log line should never be able to
+     * fail a request.</p>
+     *
+     * <p>No cascade and no orphanRemoval: a library outlives its members, and
+     * saving or deleting a user must never reach across and touch the tenant
+     * they belong to.</p>
+     */
+    @ToString.Exclude
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "library_id", nullable = false)
+    private Library library;
 
     /**
      * When the account was created.
