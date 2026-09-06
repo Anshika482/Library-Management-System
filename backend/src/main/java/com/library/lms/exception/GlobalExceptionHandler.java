@@ -446,4 +446,40 @@ public class GlobalExceptionHandler {
 
         return ResponseEntity.status(HttpStatus.CONFLICT).body(errorResponse);
     }
+
+    /**
+     * Last-resort handler for anything no other handler claims.
+     *
+     * <p>Every handler above names a specific type. This one names
+     * {@link Exception}, so it catches whatever is left - a bug in our own
+     * code, a driver fault, an error from a library we do not anticipate.</p>
+     *
+     * <p><b>It does not shadow the handlers above.</b> Spring resolves an
+     * exception to the <i>most specific</i> matching handler rather than the
+     * first or last declared, so a BookNotFoundException still reaches its own
+     * 404 and only genuinely unmatched exceptions arrive here. Position in the
+     * file is irrelevant to that.</p>
+     *
+     * <p><b>500 INTERNAL SERVER ERROR</b>, because by definition we do not know
+     * what went wrong. Anything we could have anticipated has its own handler
+     * and its own more useful status.</p>
+     *
+     * <p>The message is a fixed sentence, and the {@code exception} argument is
+     * deliberately never read. That is the whole point of this handler: an
+     * unexpected exception carries the most revealing text in the system -
+     * stack traces, SQL, class names, file paths, sometimes fragments of the
+     * data being processed. Without this handler Spring's default error page
+     * returned exactly that to the caller. The detail belongs in the server
+     * log; the response gets a sentence that says something went wrong and
+     * nothing about what.</p>
+     */
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ErrorResponse> handleUnexpectedException(Exception exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.INTERNAL_SERVER_ERROR.value(),
+                "An unexpected error occurred. Please try again later.",
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorResponse);
+    }
 }
