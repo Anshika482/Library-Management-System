@@ -60,6 +60,18 @@
         </dependency>
 
         <!--
+            Bean Validation: the jakarta.validation annotations
+            (@NotBlank, @Size, @NotNull, @Min) plus Hibernate Validator, the
+            engine that actually checks them. Spring Boot wires the two
+            together, so a request body marked @Valid is rejected before it
+            ever reaches our service code.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!--
             The MySQL JDBC driver. "runtime" scope = not needed to compile our
             code, only needed when the application actually talks to the database.
         -->
@@ -107,6 +119,33 @@
 
     <build>
         <plugins>
+
+            <!--
+                Java 23 and later no longer run annotation processors that are
+                merely present on the classpath - javac must be told about them
+                explicitly. Without this block Lombok is silently skipped: the
+                build still succeeds, but Book.class comes out with its fields
+                and no getters, setters or toString, and the first class that
+                calls book.getTitle() fails with "cannot find symbol".
+
+                Listing Lombok under <annotationProcessorPaths> makes Maven pass
+                the processor path to javac explicitly, which re-enables it. The
+                version comes from ${lombok.version}, the property the Spring Boot
+                parent already manages, so the dependency version is unchanged.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                            <version>${lombok.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
             <!--
                 Packages the application into a single executable "fat jar"
                 (mvn package) and provides the mvn spring-boot:run command.

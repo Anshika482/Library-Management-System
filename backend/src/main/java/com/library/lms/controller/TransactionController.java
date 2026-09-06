@@ -1,0 +1,170 @@
+package com.library.lms.controller;
+
+import java.util.List;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import com.library.lms.dto.IssueBookRequest;
+import com.library.lms.dto.TransactionResponse;
+import com.library.lms.entity.TransactionStatus;
+import com.library.lms.service.TransactionService;
+
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Positive;
+
+/**
+ * REST endpoints for borrowing and returning books.
+ *
+ * <p>Issuing, returning and read-only lookups are exposed. Fines and overdue
+ * detection come later.</p>
+ *
+ * <p>Structured exactly like {@link BookController}: a shared
+ * {@code @RequestMapping} prefix, constructor injection of the service, and
+ * DTOs on both sides of the boundary. There is deliberately no logic here - no
+ * availability check, no date arithmetic, no entity handling. The controller
+ * unpacks the request, calls the service and sets a status code; the rules live
+ * in {@link TransactionService} where a transaction can wrap them.</p>
+ */
+@RestController
+@RequestMapping("/api/transactions")
+public class TransactionController {
+
+    private final TransactionService transactionService;
+
+    public TransactionController(TransactionService transactionService) {
+        this.transactionService = transactionService;
+    }
+
+    /**
+     * POST /api/transactions/issue - lends one copy of a book to a user.
+     *
+     * <p>{@code @Valid} runs the rules on {@link IssueBookRequest} before this
+     * method body starts, so a missing or non-positive id never reaches the
+     * service. Those failures become a 400 through the validation handler that
+     * already exists - no second validation mechanism is introduced here.</p>
+     *
+     * <p>Answers <b>201 CREATED</b>, because a loan record now exists that did
+     * not before. The body is a {@link TransactionResponse} carrying the id the
+     * database generated, with the book and borrower as ids only - never the
+     * Book or User objects.</p>
+     *
+     * <p>Three failures are possible and all are handled centrally: an unknown
+     * book or user gives 404, and a book with every copy already on loan gives
+     * <b>409 CONFLICT</b> - the request is well formed and the book exists, but
+     * the current state of the data will not allow it.</p>
+     */
+    @PostMapping("/issue")
+    public ResponseEntity<TransactionResponse> issueBook(@Valid @RequestBody IssueBookRequest issueBookRequest) {
+        TransactionResponse issuedTransaction = transactionService.issueBook(
+                issueBookRequest.getBookId(),
+                issueBookRequest.getUserId(),
+                issueBookRequest.getDueDate());
+
+        return ResponseEntity.status(HttpStatus.CREATED).body(issuedTransaction);
+    }
+
+    /**
+     * POST /api/transactions/{transactionId}/return - takes a borrowed book back.
+     *
+     * <p>The id is in the path because it identifies the loan being acted on,
+     * and there is no request body: closing a loan needs no data beyond which
+     * loan it is. POST rather than PUT because this is an action that changes
+     * state on the server's terms - the return date is decided here, not sent
+     * by the caller.</p>
+     *
+     * <p>{@code @Positive} rejects 0 and negatives before the service or the
+     * database is touched. Spring 6.1 onwards validates constraints on
+     * controller parameters itself, so no {@code @Validated} is needed on the
+     * class and the project's existing style is unchanged.</p>
+     *
+     * <p>Answers <b>200 OK</b>, not 201: nothing new was created, an existing
+     * loan was updated. The body is the same {@link TransactionResponse} the
+     * issue endpoint returns, now carrying a return date and a RETURNED
+     * status.</p>
+     *
+     * <p>Failures are handled centrally: an unknown transaction gives 404, and
+     * one that is not in the ISSUED state - already returned, most often -
+     * gives <b>409 CONFLICT</b>, because the request is valid and the record
+     * exists but the current state will not allow the change.</p>
+     */
+    @PostMapping("/{transactionId}/return")
+    public ResponseEntity<TransactionResponse> returnBook(
+            @PathVariable @Positive(message = "Transaction id must be a positive number") Long transactionId) {
+        TransactionResponse returnedTransaction = transactionService.returnBook(transactionId);
+
+        return ResponseEntity.ok(returnedTransaction);
+    }
+
+    /**
+     * GET /api/transactions/{transactionId} - one loan by its id.
+     *
+     * <p>200 with the loan, or 404 if there is no such record. {@code @Positive}
+     * stops 0 and negatives at the edge, so the service is never called with an
+     * id that cannot exist.</p>
+     */
+    @GetMapping("/{transactionId}")
+    public ResponseEntity<TransactionResponse> getTransactionById(
+            @PathVariable @Positive(message = "Transaction id must be a positive number") Long transactionId) {
+        TransactionResponse transaction = transactionService.getTransactionById(transactionId);
+
+        return ResponseEntity.ok(transaction);
+    }
+
+    /**
+     * GET /api/transactions/book/{bookId} - the borrowing history of one book.
+     *
+     * <p>Returns every loan ever recorded against the book, returned copies
+     * included - not just what is out now. Always 200: a book nobody has
+     * borrowed gives an empty array, which is an answer rather than an error.</p>
+     */
+    @GetMapping("/book/{bookId}")
+    public ResponseEntity<List<TransactionResponse>> getTransactionsByBook(
+            @PathVariable @Positive(message = "Book id must be a positive number") Long bookId) {
+        List<TransactionResponse> transactions = transactionService.getTransactionsByBook(bookId);
+
+        return ResponseEntity.ok(transactions);
+    }
+
+    /**
+     * GET /api/transactions/user/{userId} - the borrowing history of one user.
+     *
+     * <p>Same shape and same reasoning as the book history above. Note it
+     * exposes only loan records; nothing about the user themselves is
+     * returned, not even their name.</p>
+     */
+    @GetMapping("/user/{userId}")
+    public ResponseEntity<List<TransactionResponse>> getTransactionsByUser(
+            @PathVariable @Positive(message = "User id must be a positive number") Long userId) {
+        List<TransactionResponse> transactions = transactionService.getTransactionsByUser(userId);
+
+        return ResponseEntity.ok(transactions);
+    }
+
+    /**
+     * GET /api/transactions/status/{status} - every loan in one state.
+     *
+     * <p>Accepts ISSUED, RETURNED or OVERDUE. Declaring the parameter as the
+     * {@link TransactionStatus} enum lets Spring reject anything else during
+     * conversion, before the service or a query is reached; that failure is
+     * turned into a clean 400 by the type-mismatch handler rather than a
+     * stack trace.</p>
+     *
+     * <p>The single-segment {@code /{transactionId}} mapping above is not
+     * ambiguous with this one - the paths differ in length, and Spring prefers
+     * a literal segment such as "status" over a variable in any case.</p>
+     */
+    @GetMapping("/status/{status}")
+    public ResponseEntity<List<TransactionResponse>> getTransactionsByStatus(
+            @PathVariable TransactionStatus status) {
+        List<TransactionResponse> transactions = transactionService.getTransactionsByStatus(status);
+
+        return ResponseEntity.ok(transactions);
+    }
+}
