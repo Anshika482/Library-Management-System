@@ -9,6 +9,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -31,7 +32,11 @@ import lombok.ToString;
  * {@code availableCopies} belongs in the service layer, not here.</p>
  */
 @Entity
-@Table(name = "books")
+@Table(
+        name = "books",
+        uniqueConstraints = @UniqueConstraint(
+                name = "uk_books_library_isbn",
+                columnNames = {"library_id", "isbn"}))
 // --- Lombok: these five annotations are replaced by real code at compile time ---
 @Getter                 // a getXxx() for every field
 @Setter                 // a setXxx() for every field
@@ -68,7 +73,7 @@ public class Book {
      * forgets to check. 20 characters comfortably fits both ISBN-10 and
      * ISBN-13, with or without hyphens.</p>
      */
-    @Column(nullable = false, unique = true, length = 20)
+    @Column(nullable = false, length = 20)
     private String isbn;
 
     /**

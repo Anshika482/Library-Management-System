@@ -34,20 +34,6 @@ import com.library.lms.entity.Book;
 public interface BookRepository extends JpaRepository<Book, Long>, JpaSpecificationExecutor<Book> {
 
     /**
-     * Finds the single book carrying this ISBN.
-     *
-     * <p>This is a <b>derived query</b>: Spring Data parses the method name
-     * {@code findByIsbn} and writes the SQL itself
-     * ({@code SELECT * FROM books WHERE isbn = ?}). No @Query is needed - the
-     * name is the query, so it must match the {@code isbn} field on Book.</p>
-     *
-     * <p>The return type is {@code Optional<Book>} because the ISBN may not be
-     * in the library at all. Optional forces the caller to handle the "not
-     * found" case explicitly instead of risking a NullPointerException, and it
-     * is the right type here precisely because {@code isbn} is unique - at most
-     * one row can ever come back.</p>
-     */
-    /**
      * One book, but only if it belongs to this library.
      *
      * <p>Scoping the lookup rather than loading the row and checking afterwards
@@ -79,20 +65,18 @@ public interface BookRepository extends JpaRepository<Book, Long>, JpaSpecificat
     /**
      * One book by ISBN within a library.
      *
-     * <p>Declared for the library-scoped duplicate check that arrives with the
-     * composite {@code UNIQUE(library_id, isbn)} constraint. It is deliberately
-     * not wired up yet: the database still enforces ISBN uniqueness globally, so
-     * a service check narrower than the constraint would pass a duplicate the
-     * database then rejects, turning a clean 400 into a 409. The two change
-     * together, not separately.</p>
+     * <p>This is the duplicate check the service uses. It is scoped because the
+     * database now enforces {@code UNIQUE(library_id, isbn)} rather than a global
+     * unique ISBN: two libraries stocking the same title is ordinary, and only a
+     * repeat within one library is a clash. Service and constraint agree, so a
+     * rejected ISBN fails as a clean validation error rather than as a database
+     * integrity violation.</p>
      *
      * @param isbn      the ISBN to look for
      * @param libraryId the library to look in
      * @return the matching book within that library, if any
      */
     Optional<Book> findByIsbnAndLibraryId(String isbn, Long libraryId);
-
-    Optional<Book> findByIsbn(String isbn);
 
     /**
      * Finds every book shelved under the category with this name.

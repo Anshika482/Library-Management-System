@@ -34,6 +34,7 @@ import com.library.lms.entity.Role;
 import com.library.lms.entity.User;
 import com.library.lms.exception.BookNotFoundException;
 import com.library.lms.exception.CategoryNotFoundException;
+import com.library.lms.exception.DuplicateIsbnException;
 import com.library.lms.exception.UserNotFoundException;
 import com.library.lms.repository.BookRepository;
 import com.library.lms.repository.CategoryRepository;
@@ -221,7 +222,8 @@ class BookServiceLibraryScopingTest {
     @Test
     void createAssignsTheCallersLibraryAndNeverAClientValue() {
         callerIsInOwnLibrary();
-        when(bookRepository.findByIsbn(anyString())).thenReturn(Optional.empty());
+        when(bookRepository.findByIsbnAndLibraryId(anyString(), eq(OWN_LIBRARY_ID)))
+                .thenReturn(Optional.empty());
         when(categoryRepository.findByIdAndLibraryId(CATEGORY_ID, OWN_LIBRARY_ID))
                 .thenReturn(Optional.of(category(CATEGORY_ID, OWN_LIBRARY_ID)));
         when(bookRepository.save(any(Book.class))).thenAnswer(i -> i.getArgument(0));
@@ -237,7 +239,8 @@ class BookServiceLibraryScopingTest {
     void createRefusesACategoryFromAnotherLibrary() {
         // The cross-tenant *write* the old global findById allowed.
         callerIsInOwnLibrary();
-        when(bookRepository.findByIsbn(anyString())).thenReturn(Optional.empty());
+        when(bookRepository.findByIsbnAndLibraryId(anyString(), eq(OWN_LIBRARY_ID)))
+                .thenReturn(Optional.empty());
         when(categoryRepository.findByIdAndLibraryId(CATEGORY_ID, OWN_LIBRARY_ID))
                 .thenReturn(Optional.empty());
 
@@ -266,7 +269,8 @@ class BookServiceLibraryScopingTest {
         callerIsInOwnLibrary();
         when(bookRepository.findByIdAndLibraryId(BOOK_ID, OWN_LIBRARY_ID))
                 .thenReturn(Optional.of(book(BOOK_ID, "Owned", OWN_LIBRARY_ID)));
-        when(bookRepository.findByIsbn(anyString())).thenReturn(Optional.empty());
+        when(bookRepository.findByIsbnAndLibraryId(anyString(), eq(OWN_LIBRARY_ID)))
+                .thenReturn(Optional.empty());
         when(categoryRepository.findByIdAndLibraryId(CATEGORY_ID, OWN_LIBRARY_ID))
                 .thenReturn(Optional.empty());
 
@@ -281,7 +285,8 @@ class BookServiceLibraryScopingTest {
         callerIsInOwnLibrary();
         Book own = book(BOOK_ID, "Old Title", OWN_LIBRARY_ID);
         when(bookRepository.findByIdAndLibraryId(BOOK_ID, OWN_LIBRARY_ID)).thenReturn(Optional.of(own));
-        when(bookRepository.findByIsbn(anyString())).thenReturn(Optional.empty());
+        when(bookRepository.findByIsbnAndLibraryId(anyString(), eq(OWN_LIBRARY_ID)))
+                .thenReturn(Optional.empty());
         when(bookRepository.save(any(Book.class))).thenAnswer(i -> i.getArgument(0));
 
         BookResponse response = bookService.updateBook(BOOK_ID, request(null), CALLER);
@@ -336,5 +341,111 @@ class BookServiceLibraryScopingTest {
 
         verify(bookRepository).findByIdAndLibraryId(BOOK_ID, OWN_LIBRARY_ID);
         verify(bookRepository, never()).findByIdAndLibraryId(anyLong(), eq(OTHER_LIBRARY_ID));
+    }
+
+    // ---------- library-scoped ISBN uniqueness ----------
+
+    @Test
+    void createRejectsADuplicateIsbnWithinTheSameLibrary() {
+        callerIsInOwnLibrary();
+        when(bookRepository.findByIsbnAndLibraryId("9780000000999", OWN_LIBRARY_ID))
+                .thenReturn(Optional.of(book(99L, "Already Stocked", OWN_LIBRARY_ID)));
+
+        assertThatThrownBy(() -> bookService.createBook(request(null), CALLER))
+                .isInstanceOf(DuplicateIsbnException.class);
+
+        verify(bookRepository, never()).save(any(Book.class));
+    }
+
+    @Test
+    void createAllowsTheSameIsbnInADifferentLibrary() {
+        // The point of the change: library 2 stocking a title library 1 already
+        // holds is ordinary, and its own scoped check comes back clean.
+        User other = new User();
+        other.setId(20L);
+        other.setUsername("other-librarian");
+        other.setRole(Role.ROLE_LIBRARIAN);
+        other.setLibrary(library(OTHER_LIBRARY_ID));
+        when(userRepository.findByUsername("other-librarian")).thenReturn(Optional.of(other));
+        when(bookRepository.findByIsbnAndLibraryId("9780000000999", OTHER_LIBRARY_ID))
+                .thenReturn(Optional.empty());
+        when(bookRepository.save(any(Book.class))).thenAnswer(i -> i.getArgument(0));
+
+        BookResponse response = bookService.createBook(request(null), "other-librarian");
+
+        assertThat(response.getIsbn()).isEqualTo("9780000000999");
+    }
+
+    @Test
+    void createChecksIsbnWithTheScopedLookupNotAGlobalOne() {
+        callerIsInOwnLibrary();
+        when(bookRepository.findByIsbnAndLibraryId("9780000000999", OWN_LIBRARY_ID))
+                .thenReturn(Optional.empty());
+        when(bookRepository.save(any(Book.class))).thenAnswer(i -> i.getArgument(0));
+
+        bookService.createBook(request(null), CALLER);
+
+        verify(bookRepository).findByIsbnAndLibraryId("9780000000999", OWN_LIBRARY_ID);
+        verify(bookRepository, never()).findByIsbnAndLibraryId(anyString(), eq(OTHER_LIBRARY_ID));
+    }
+
+    @Test
+    void updateRejectsAnIsbnHeldByAnotherBookInTheSameLibrary() {
+        callerIsInOwnLibrary();
+        when(bookRepository.findByIdAndLibraryId(BOOK_ID, OWN_LIBRARY_ID))
+                .thenReturn(Optional.of(book(BOOK_ID, "Being Edited", OWN_LIBRARY_ID)));
+        when(bookRepository.findByIsbnAndLibraryId("9780000000999", OWN_LIBRARY_ID))
+                .thenReturn(Optional.of(book(99L, "A Different Book", OWN_LIBRARY_ID)));
+
+        assertThatThrownBy(() -> bookService.updateBook(BOOK_ID, request(null), CALLER))
+                .isInstanceOf(DuplicateIsbnException.class);
+
+        verify(bookRepository, never()).save(any(Book.class));
+    }
+
+    @Test
+    void updateAllowsAnIsbnThatOnlyAnotherLibraryHolds() {
+        // The scoped lookup simply does not see the other library's row, so the
+        // rename goes through.
+        callerIsInOwnLibrary();
+        when(bookRepository.findByIdAndLibraryId(BOOK_ID, OWN_LIBRARY_ID))
+                .thenReturn(Optional.of(book(BOOK_ID, "Being Edited", OWN_LIBRARY_ID)));
+        when(bookRepository.findByIsbnAndLibraryId("9780000000999", OWN_LIBRARY_ID))
+                .thenReturn(Optional.empty());
+        when(bookRepository.save(any(Book.class))).thenAnswer(i -> i.getArgument(0));
+
+        BookResponse response = bookService.updateBook(BOOK_ID, request(null), CALLER);
+
+        assertThat(response.getIsbn()).isEqualTo("9780000000999");
+    }
+
+    @Test
+    void updateLetsABookKeepItsOwnIsbn() {
+        // The scoped lookup returns the very row being edited; excluding it by id
+        // is what stops a no-op rename from reporting a duplicate against itself.
+        callerIsInOwnLibrary();
+        Book editing = book(BOOK_ID, "Being Edited", OWN_LIBRARY_ID);
+        when(bookRepository.findByIdAndLibraryId(BOOK_ID, OWN_LIBRARY_ID)).thenReturn(Optional.of(editing));
+        when(bookRepository.findByIsbnAndLibraryId("9780000000999", OWN_LIBRARY_ID))
+                .thenReturn(Optional.of(editing));
+        when(bookRepository.save(any(Book.class))).thenAnswer(i -> i.getArgument(0));
+
+        BookResponse response = bookService.updateBook(BOOK_ID, request(null), CALLER);
+
+        assertThat(response.getIsbn()).isEqualTo("9780000000999");
+    }
+
+    @Test
+    void isbnValidationAlwaysUsesTheCallersOwnLibrary() {
+        callerIsInOwnLibrary();
+        when(bookRepository.findByIdAndLibraryId(BOOK_ID, OWN_LIBRARY_ID))
+                .thenReturn(Optional.of(book(BOOK_ID, "Being Edited", OWN_LIBRARY_ID)));
+        when(bookRepository.findByIsbnAndLibraryId("9780000000999", OWN_LIBRARY_ID))
+                .thenReturn(Optional.empty());
+        when(bookRepository.save(any(Book.class))).thenAnswer(i -> i.getArgument(0));
+
+        bookService.updateBook(BOOK_ID, request(null), CALLER);
+
+        verify(bookRepository).findByIsbnAndLibraryId("9780000000999", OWN_LIBRARY_ID);
     }
 }

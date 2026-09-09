@@ -252,12 +252,13 @@ public class BookService {
      */
     @Transactional
     public BookResponse createBook(BookRequest request, String authenticatedUsername) {
-        ensureIsbnIsAvailable(request.getIsbn(), null);
-
         // The owning library comes from the caller's own account, never from the
         // request. BookRequest carries no libraryId, and giving it one would let
         // any librarian file stock into another library by changing a number.
+        // Resolved before the ISBN check, which is now scoped to it.
         Library library = authenticatedUser(authenticatedUsername).getLibrary();
+
+        ensureIsbnIsAvailable(request.getIsbn(), null, library.getId());
 
         Book book = new Book();
         book.setLibrary(library);
@@ -287,7 +288,7 @@ public class BookService {
         Long libraryId = libraryIdOf(authenticatedUsername);
 
         Book existingBook = findBookOrThrow(id, libraryId);
-        ensureIsbnIsAvailable(request.getIsbn(), id);
+        ensureIsbnIsAvailable(request.getIsbn(), id, libraryId);
 
         applyRequestToBook(request, existingBook, libraryId);
 
@@ -479,8 +480,12 @@ public class BookService {
      * fire means no failed INSERT is ever attempted, and the client gets a
      * readable message instead of an SQL error.</p>
      */
-    private void ensureIsbnIsAvailable(String isbn, Long currentBookId) {
-        bookRepository.findByIsbn(isbn)
+    private void ensureIsbnIsAvailable(String isbn, Long currentBookId, Long libraryId) {
+        // Scoped to the caller's library: two libraries stocking the same title
+        // is the normal case, and the global check this replaces refused the
+        // second one outright. The filter still excludes the row being edited,
+        // so a book may keep its own ISBN on update.
+        bookRepository.findByIsbnAndLibraryId(isbn, libraryId)
                 .filter(bookWithSameIsbn -> !bookWithSameIsbn.getId().equals(currentBookId))
                 .ifPresent(bookWithSameIsbn -> {
                     throw new DuplicateIsbnException(isbn);
