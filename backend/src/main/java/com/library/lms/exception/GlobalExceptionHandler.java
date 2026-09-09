@@ -261,6 +261,28 @@ public class GlobalExceptionHandler {
      * the list of names the API accepts - no entity fields, no SQL, no
      * package details.</p>
      */
+    /**
+     * Handles a copy count that would contradict the loans already recorded.
+     *
+     * <p>400, because the caller asked for something arithmetically impossible
+     * rather than the server failing. The message comes from the exception,
+     * which carries only counts - how many copies were requested and how many
+     * are out - so a client can correct the request without learning anything
+     * about the row, the query or the schema.</p>
+     *
+     * @param exception the rejected copy count
+     * @return 400 with the business explanation
+     */
+    @ExceptionHandler(InvalidCopyCountException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidCopyCount(InvalidCopyCountException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.BAD_REQUEST.value(),
+                exception.getMessage(),
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorResponse);
+    }
+
     @ExceptionHandler(InvalidSortException.class)
     public ResponseEntity<ErrorResponse> handleInvalidSort(InvalidSortException exception) {
         ErrorResponse errorResponse = new ErrorResponse(

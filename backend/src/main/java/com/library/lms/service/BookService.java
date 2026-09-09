@@ -22,6 +22,7 @@ import com.library.lms.entity.User;
 import com.library.lms.exception.BookNotFoundException;
 import com.library.lms.exception.CategoryNotFoundException;
 import com.library.lms.exception.DuplicateIsbnException;
+import com.library.lms.exception.InvalidCopyCountException;
 import com.library.lms.exception.InvalidPaginationException;
 import com.library.lms.exception.InvalidSortException;
 import com.library.lms.exception.UserNotFoundException;
@@ -264,6 +265,12 @@ public class BookService {
         book.setLibrary(library);
         applyRequestToBook(request, book, library.getId());
 
+        // A brand new title has nothing on loan yet, so every copy is on the
+        // shelf. Deriving it rather than accepting it means a book cannot be
+        // created already claiming copies are out.
+        book.setTotalCopies(request.getTotalCopies());
+        book.setAvailableCopies(request.getTotalCopies());
+
         return toResponse(bookRepository.save(book));
     }
 
@@ -291,6 +298,7 @@ public class BookService {
         ensureIsbnIsAvailable(request.getIsbn(), id, libraryId);
 
         applyRequestToBook(request, existingBook, libraryId);
+        applyTotalCopies(existingBook, request.getTotalCopies());
 
         return toResponse(bookRepository.save(existingBook));
     }
@@ -450,8 +458,42 @@ public class BookService {
         book.setAuthor(request.getAuthor());
         book.setIsbn(request.getIsbn());
         book.setCategory(resolveCategory(request.getCategoryId(), libraryId));
-        book.setTotalCopies(request.getTotalCopies());
-        book.setAvailableCopies(request.getAvailableCopies());
+    }
+
+    /**
+     * Re-stocks a book to a new total while preserving what is on loan.
+     *
+     * <p>The count of issued copies is the one fact this method must not lose:
+     * it is the difference between what the library owns and what is on the
+     * shelf, and it corresponds to physical books in readers' hands. So the
+     * new availability is derived from it rather than taken from the request:</p>
+     *
+     * <pre>
+     *     issued    = oldTotal - oldAvailable
+     *     available = newTotal - issued
+     * </pre>
+     *
+     * <p>Adding copies puts the new ones straight on the shelf; removing copies
+     * takes them off the shelf, never out of a reader's hands. A total below the
+     * issued count is refused, because there is no honest availability that
+     * satisfies it - the alternative would be a negative shelf count, or
+     * silently forgetting a loan.</p>
+     *
+     * @param book           the book being edited, still holding its stored counts
+     * @param newTotalCopies the requested total
+     * @throws InvalidCopyCountException if the new total is below the issued count
+     */
+    private void applyTotalCopies(Book book, int newTotalCopies) {
+        int issuedCopies = book.getTotalCopies() - book.getAvailableCopies();
+
+        if (newTotalCopies < issuedCopies) {
+            throw new InvalidCopyCountException(
+                    "Total copies cannot be less than the number currently issued: requested "
+                            + newTotalCopies + " but " + issuedCopies + " are on loan");
+        }
+
+        book.setTotalCopies(newTotalCopies);
+        book.setAvailableCopies(newTotalCopies - issuedCopies);
     }
 
     /**

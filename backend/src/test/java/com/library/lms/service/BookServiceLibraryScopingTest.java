@@ -35,6 +35,7 @@ import com.library.lms.entity.User;
 import com.library.lms.exception.BookNotFoundException;
 import com.library.lms.exception.CategoryNotFoundException;
 import com.library.lms.exception.DuplicateIsbnException;
+import com.library.lms.exception.InvalidCopyCountException;
 import com.library.lms.exception.UserNotFoundException;
 import com.library.lms.repository.BookRepository;
 import com.library.lms.repository.CategoryRepository;
@@ -105,6 +106,20 @@ class BookServiceLibraryScopingTest {
         return book;
     }
 
+    /** A book with explicit copy counts, so issued = total - available. */
+    private static Book stocked(Long id, int totalCopies, int availableCopies) {
+        Book book = book(id, "Stocked", OWN_LIBRARY_ID);
+        book.setTotalCopies(totalCopies);
+        book.setAvailableCopies(availableCopies);
+        return book;
+    }
+
+    private static BookRequest requestWithTotal(int totalCopies) {
+        BookRequest request = request(null);
+        request.setTotalCopies(totalCopies);
+        return request;
+    }
+
     private void callerIsInOwnLibrary() {
         User user = new User();
         user.setId(10L);
@@ -121,7 +136,6 @@ class BookServiceLibraryScopingTest {
         request.setIsbn("9780000000999");
         request.setCategoryId(categoryId);
         request.setTotalCopies(3);
-        request.setAvailableCopies(3);
         return request;
     }
 
@@ -447,5 +461,139 @@ class BookServiceLibraryScopingTest {
         bookService.updateBook(BOOK_ID, request(null), CALLER);
 
         verify(bookRepository).findByIsbnAndLibraryId("9780000000999", OWN_LIBRARY_ID);
+    }
+
+    // ---------- copy-count safety ----------
+
+    @Test
+    void bookRequestCarriesNoAvailableCopies() {
+        // availableCopies is a running total the system maintains, not something
+        // a routine edit may overwrite.
+        assertThat(java.util.Arrays.stream(BookRequest.class.getDeclaredFields())
+                .map(java.lang.reflect.Field::getName))
+                .as("available copies must not be client-supplied")
+                .doesNotContain("availableCopies")
+                .contains("totalCopies");
+
+        assertThat(java.util.Arrays.stream(BookRequest.class.getMethods())
+                .map(java.lang.reflect.Method::getName))
+                .doesNotContain("getAvailableCopies", "setAvailableCopies");
+    }
+
+    @Test
+    void createPutsEveryCopyOnTheShelf() {
+        callerIsInOwnLibrary();
+        when(bookRepository.findByIsbnAndLibraryId(anyString(), eq(OWN_LIBRARY_ID)))
+                .thenReturn(Optional.empty());
+        when(bookRepository.save(any(Book.class))).thenAnswer(i -> i.getArgument(0));
+
+        BookResponse response = bookService.createBook(requestWithTotal(10), CALLER);
+
+        assertThat(response.getTotalCopies()).isEqualTo(10);
+        assertThat(response.getAvailableCopies())
+                .as("a new title has nothing on loan yet")
+                .isEqualTo(10);
+    }
+
+    @Test
+    void createDerivesAvailabilityRatherThanTakingIt() {
+        callerIsInOwnLibrary();
+        when(bookRepository.findByIsbnAndLibraryId(anyString(), eq(OWN_LIBRARY_ID)))
+                .thenReturn(Optional.empty());
+        when(bookRepository.save(any(Book.class))).thenAnswer(i -> i.getArgument(0));
+
+        bookService.createBook(requestWithTotal(4), CALLER);
+
+        ArgumentCaptor<Book> saved = ArgumentCaptor.forClass(Book.class);
+        verify(bookRepository).save(saved.capture());
+        assertThat(saved.getValue().getAvailableCopies()).isEqualTo(saved.getValue().getTotalCopies());
+    }
+
+    @Test
+    void raisingTheTotalPutsTheNewCopiesOnTheShelf() {
+        // old total 10, available 7 -> 3 on loan. New total 12 -> 9 available.
+        callerIsInOwnLibrary();
+        Book existing = stocked(BOOK_ID, 10, 7);
+        when(bookRepository.findByIdAndLibraryId(BOOK_ID, OWN_LIBRARY_ID)).thenReturn(Optional.of(existing));
+        when(bookRepository.findByIsbnAndLibraryId(anyString(), eq(OWN_LIBRARY_ID)))
+                .thenReturn(Optional.empty());
+        when(bookRepository.save(any(Book.class))).thenAnswer(i -> i.getArgument(0));
+
+        BookResponse response = bookService.updateBook(BOOK_ID, requestWithTotal(12), CALLER);
+
+        assertThat(response.getTotalCopies()).isEqualTo(12);
+        assertThat(response.getAvailableCopies()).isEqualTo(9);
+    }
+
+    @Test
+    void loweringTheTotalTakesCopiesOffTheShelfOnly() {
+        // old total 10, available 7 -> 3 on loan. New total 8 -> 5 available.
+        callerIsInOwnLibrary();
+        Book existing = stocked(BOOK_ID, 10, 7);
+        when(bookRepository.findByIdAndLibraryId(BOOK_ID, OWN_LIBRARY_ID)).thenReturn(Optional.of(existing));
+        when(bookRepository.findByIsbnAndLibraryId(anyString(), eq(OWN_LIBRARY_ID)))
+                .thenReturn(Optional.empty());
+        when(bookRepository.save(any(Book.class))).thenAnswer(i -> i.getArgument(0));
+
+        BookResponse response = bookService.updateBook(BOOK_ID, requestWithTotal(8), CALLER);
+
+        assertThat(response.getTotalCopies()).isEqualTo(8);
+        assertThat(response.getAvailableCopies()).isEqualTo(5);
+    }
+
+    @Test
+    void aTotalBelowTheIssuedCountIsRejected() {
+        // old total 10, available 7 -> 3 on loan. New total 2 cannot hold them.
+        callerIsInOwnLibrary();
+        Book existing = stocked(BOOK_ID, 10, 7);
+        when(bookRepository.findByIdAndLibraryId(BOOK_ID, OWN_LIBRARY_ID)).thenReturn(Optional.of(existing));
+        when(bookRepository.findByIsbnAndLibraryId(anyString(), eq(OWN_LIBRARY_ID)))
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> bookService.updateBook(BOOK_ID, requestWithTotal(2), CALLER))
+                .isInstanceOf(InvalidCopyCountException.class)
+                .hasMessageContaining("2")
+                .hasMessageContaining("3");
+
+        verify(bookRepository, never()).save(any(Book.class));
+        assertThat(existing.getTotalCopies()).as("left untouched on refusal").isEqualTo(10);
+        assertThat(existing.getAvailableCopies()).isEqualTo(7);
+    }
+
+    @Test
+    void aTotalExactlyEqualToTheIssuedCountIsAllowed() {
+        // The boundary: 3 on loan, new total 3 -> 0 on the shelf, never negative.
+        callerIsInOwnLibrary();
+        Book existing = stocked(BOOK_ID, 10, 7);
+        when(bookRepository.findByIdAndLibraryId(BOOK_ID, OWN_LIBRARY_ID)).thenReturn(Optional.of(existing));
+        when(bookRepository.findByIsbnAndLibraryId(anyString(), eq(OWN_LIBRARY_ID)))
+                .thenReturn(Optional.empty());
+        when(bookRepository.save(any(Book.class))).thenAnswer(i -> i.getArgument(0));
+
+        BookResponse response = bookService.updateBook(BOOK_ID, requestWithTotal(3), CALLER);
+
+        assertThat(response.getTotalCopies()).isEqualTo(3);
+        assertThat(response.getAvailableCopies()).isZero();
+    }
+
+    @Test
+    void updateNeverCopiesAvailabilityFromTheRequest() {
+        // Availability is computed from the stored counts alone. The request has
+        // no availableCopies to read, and the saved value proves it was derived.
+        callerIsInOwnLibrary();
+        Book existing = stocked(BOOK_ID, 10, 7);
+        when(bookRepository.findByIdAndLibraryId(BOOK_ID, OWN_LIBRARY_ID)).thenReturn(Optional.of(existing));
+        when(bookRepository.findByIsbnAndLibraryId(anyString(), eq(OWN_LIBRARY_ID)))
+                .thenReturn(Optional.empty());
+        when(bookRepository.save(any(Book.class))).thenAnswer(i -> i.getArgument(0));
+
+        bookService.updateBook(BOOK_ID, requestWithTotal(12), CALLER);
+
+        ArgumentCaptor<Book> saved = ArgumentCaptor.forClass(Book.class);
+        verify(bookRepository).save(saved.capture());
+        int issuedBefore = 10 - 7;
+        assertThat(saved.getValue().getTotalCopies() - saved.getValue().getAvailableCopies())
+                .as("the number on loan is preserved across the edit")
+                .isEqualTo(issuedBefore);
     }
 }

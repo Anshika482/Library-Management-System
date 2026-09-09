@@ -74,15 +74,23 @@ public class BookRequest {
     private Long categoryId;
 
     /**
-     * {@code @NotNull} is the right choice for a number: an Integer has no
+     * How many copies of this title the library holds.
+     *
+     * <p>{@code @NotNull} is the right choice for a number: an Integer has no
      * "blank" state, it is either provided or missing. {@code @Min(0)} then
-     * rejects negative counts, which would make no sense for copies of a book.
+     * rejects negative counts, which would make no sense for copies of a
+     * book.</p>
+     *
+     * <p><b>There is no {@code availableCopies} beside it, and that absence is
+     * deliberate.</b> How many copies are on the shelf right now is not a fact
+     * about the request, it is a running total the system maintains: issuing a
+     * book decrements it and returning one increments it. Letting a routine
+     * edit overwrite that number would let a librarian silently erase the record
+     * of what is currently lent out, or claim more copies are free than
+     * physically exist. The service derives it instead - see
+     * {@code BookService.createBook} and {@code BookService.updateBook}.</p>
      */
     @NotNull(message = "Total copies is required")
     @Min(value = 0, message = "Total copies must be 0 or greater")
     private Integer totalCopies;
-
-    @NotNull(message = "Available copies is required")
-    @Min(value = 0, message = "Available copies must be 0 or greater")
-    private Integer availableCopies;
 }
