@@ -10,20 +10,25 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import com.library.lms.dto.BookRequest;
 import com.library.lms.dto.BookResponse;
 import com.library.lms.dto.PagedResponse;
 import com.library.lms.entity.Book;
 import com.library.lms.entity.Category;
+import com.library.lms.entity.Library;
+import com.library.lms.entity.User;
 import com.library.lms.exception.BookNotFoundException;
 import com.library.lms.exception.CategoryNotFoundException;
 import com.library.lms.exception.DuplicateIsbnException;
 import com.library.lms.exception.InvalidPaginationException;
 import com.library.lms.exception.InvalidSortException;
+import com.library.lms.exception.UserNotFoundException;
 import com.library.lms.repository.BookRepository;
 import com.library.lms.repository.BookSpecifications;
 import com.library.lms.repository.CategoryRepository;
+import com.library.lms.repository.UserRepository;
 
 /**
  * Business logic for managing books.
@@ -105,9 +110,13 @@ public class BookService {
      */
     private final CategoryRepository categoryRepository;
 
-    public BookService(BookRepository bookRepository, CategoryRepository categoryRepository) {
+    private final UserRepository userRepository;
+
+    public BookService(BookRepository bookRepository, CategoryRepository categoryRepository,
+                       UserRepository userRepository) {
         this.bookRepository = bookRepository;
         this.categoryRepository = categoryRepository;
+        this.userRepository = userRepository;
     }
 
     /**
@@ -152,11 +161,14 @@ public class BookService {
      * @throws CategoryNotFoundException  if categoryId is given but does not exist
      */
     public PagedResponse<BookResponse> getAllBooks(int page, int size, String sortBy, String direction,
-                                                   String keyword, Long categoryId) {
+                                                   String keyword, Long categoryId,
+                                                   String authenticatedUsername) {
+        Long libraryId = libraryIdOf(authenticatedUsername);
+
         validatePagination(page, size);
 
         Pageable pageable = PageRequest.of(page, size, resolveSort(sortBy, direction));
-        Page<Book> bookPage = bookRepository.findAll(buildFilter(keyword, categoryId), pageable);
+        Page<Book> bookPage = bookRepository.findAll(buildFilter(keyword, categoryId, libraryId), pageable);
 
         List<BookResponse> content = bookPage.getContent()
                 .stream()
@@ -176,8 +188,8 @@ public class BookService {
      *
      * @throws BookNotFoundException if no book has this id
      */
-    public BookResponse getBookById(Long id) {
-        return toResponse(findBookOrThrow(id));
+    public BookResponse getBookById(Long id, String authenticatedUsername) {
+        return toResponse(findBookOrThrow(id, libraryIdOf(authenticatedUsername)));
     }
 
     /**
@@ -192,10 +204,13 @@ public class BookService {
      * "Effective Java". No match is not an error - the result is simply an
      * empty list.</p>
      */
-    public List<BookResponse> searchBooks(String keyword) {
-        Specification<Book> specification = hasKeyword(keyword)
-                ? BookSpecifications.matchesKeyword(keyword.trim())
-                : BookSpecifications.always();
+    public List<BookResponse> searchBooks(String keyword, String authenticatedUsername) {
+        Specification<Book> specification =
+                BookSpecifications.belongsToLibrary(libraryIdOf(authenticatedUsername));
+
+        if (hasKeyword(keyword)) {
+            specification = specification.and(BookSpecifications.matchesKeyword(keyword.trim()));
+        }
 
         return bookRepository.findAll(specification)
                 .stream()
@@ -215,8 +230,8 @@ public class BookService {
      * for a shelf that happens to hold nothing is a valid question with a valid
      * answer.</p>
      */
-    public List<BookResponse> getBooksByCategory(String category) {
-        return bookRepository.findByCategoryName(category)
+    public List<BookResponse> getBooksByCategory(String category, String authenticatedUsername) {
+        return bookRepository.findByLibraryIdAndCategoryName(libraryIdOf(authenticatedUsername), category)
                 .stream()
                 .map(this::toResponse)
                 .toList();
@@ -235,11 +250,18 @@ public class BookService {
      *
      * @throws DuplicateIsbnException if another book already uses this ISBN
      */
-    public BookResponse createBook(BookRequest request) {
+    @Transactional
+    public BookResponse createBook(BookRequest request, String authenticatedUsername) {
         ensureIsbnIsAvailable(request.getIsbn(), null);
 
+        // The owning library comes from the caller's own account, never from the
+        // request. BookRequest carries no libraryId, and giving it one would let
+        // any librarian file stock into another library by changing a number.
+        Library library = authenticatedUser(authenticatedUsername).getLibrary();
+
         Book book = new Book();
-        applyRequestToBook(request, book);
+        book.setLibrary(library);
+        applyRequestToBook(request, book, library.getId());
 
         return toResponse(bookRepository.save(book));
     }
@@ -261,11 +283,13 @@ public class BookService {
      * @throws BookNotFoundException  if no book has this id
      * @throws DuplicateIsbnException if the new ISBN belongs to another book
      */
-    public BookResponse updateBook(Long id, BookRequest request) {
-        Book existingBook = findBookOrThrow(id);
+    public BookResponse updateBook(Long id, BookRequest request, String authenticatedUsername) {
+        Long libraryId = libraryIdOf(authenticatedUsername);
+
+        Book existingBook = findBookOrThrow(id, libraryId);
         ensureIsbnIsAvailable(request.getIsbn(), id);
 
-        applyRequestToBook(request, existingBook);
+        applyRequestToBook(request, existingBook, libraryId);
 
         return toResponse(bookRepository.save(existingBook));
     }
@@ -281,11 +305,10 @@ public class BookService {
      *
      * @throws BookNotFoundException if no book has this id
      */
-    public void deleteBook(Long id) {
-        if (!bookRepository.existsById(id)) {
-            throw new BookNotFoundException(id);
-        }
-        bookRepository.deleteById(id);
+    public void deleteBook(Long id, String authenticatedUsername) {
+        Book book = findBookOrThrow(id, libraryIdOf(authenticatedUsername));
+
+        bookRepository.delete(book);
     }
 
     // ------------------------------------------------------------------
@@ -309,11 +332,13 @@ public class BookService {
      * books" when the truth is "there is no such category" - two very different
      * answers.</p>
      */
-    private Specification<Book> buildFilter(String keyword, Long categoryId) {
-        Specification<Book> specification = BookSpecifications.always();
+    private Specification<Book> buildFilter(String keyword, Long categoryId, Long libraryId) {
+        // The tenant predicate is the starting point, not an optional extra, so
+        // every filter combination below narrows an already-scoped result set.
+        Specification<Book> specification = BookSpecifications.belongsToLibrary(libraryId);
 
         if (categoryId != null) {
-            if (!categoryRepository.existsById(categoryId)) {
+            if (categoryRepository.findByIdAndLibraryId(categoryId, libraryId).isEmpty()) {
                 throw new CategoryNotFoundException(categoryId);
             }
             specification = specification.and(BookSpecifications.hasCategory(categoryId));
@@ -402,8 +427,12 @@ public class BookService {
      * "missing book" rule here means it exists in exactly one place, and every
      * public method that needs a book by id goes through it.</p>
      */
-    private Book findBookOrThrow(Long id) {
-        return bookRepository.findById(id)
+    private Book findBookOrThrow(Long id, Long libraryId) {
+        // A book in another library and a book that never existed both arrive
+        // here as an empty Optional and leave as the same 404. Splitting them
+        // into 404 and 403 would turn the id into a directory of a neighbour's
+        // stock: every 403 would confirm a real book.
+        return bookRepository.findByIdAndLibraryId(id, libraryId)
                 .orElseThrow(() -> new BookNotFoundException(id));
     }
 
@@ -415,11 +444,11 @@ public class BookService {
      * loaded. Note what is <i>not</i> copied - the id - which is exactly the
      * protection a DTO is meant to give.</p>
      */
-    private void applyRequestToBook(BookRequest request, Book book) {
+    private void applyRequestToBook(BookRequest request, Book book, Long libraryId) {
         book.setTitle(request.getTitle());
         book.setAuthor(request.getAuthor());
         book.setIsbn(request.getIsbn());
-        book.setCategory(resolveCategory(request.getCategoryId()));
+        book.setCategory(resolveCategory(request.getCategoryId(), libraryId));
         book.setTotalCopies(request.getTotalCopies());
         book.setAvailableCopies(request.getAvailableCopies());
     }
@@ -469,13 +498,46 @@ public class BookService {
      * {@link CategoryNotFoundException} instead, which the exception handler
      * turns into a 404.</p>
      */
-    private Category resolveCategory(Long categoryId) {
+    private Category resolveCategory(Long categoryId, Long libraryId) {
         if (categoryId == null) {
             return null;
         }
 
-        return categoryRepository.findById(categoryId)
+        // Scoped, so a book can never be filed under another library's shelf.
+        // A category that exists but belongs elsewhere is reported exactly as a
+        // category that does not exist, disclosing nothing about the neighbour.
+        return categoryRepository.findByIdAndLibraryId(categoryId, libraryId)
                 .orElseThrow(() -> new CategoryNotFoundException(categoryId));
+    }
+
+    /**
+     * The account behind the authenticated name.
+     *
+     * <p>Every library-sensitive method in this class reaches its tenant through
+     * here, so the library is always derived from the caller the server
+     * authenticated and never from anything the request carried.</p>
+     *
+     * @param authenticatedUsername the caller's login name
+     * @return the caller's account
+     * @throws UserNotFoundException if the authenticated name matches no account
+     */
+    private User authenticatedUser(String authenticatedUsername) {
+        return userRepository.findByUsername(authenticatedUsername)
+                .orElseThrow(() -> new UserNotFoundException(authenticatedUsername));
+    }
+
+    /**
+     * The id of the library the caller belongs to.
+     *
+     * <p>Reading a lazy proxy's identifier does not initialise it, so the read
+     * paths need no transaction; {@link #createBook} is the exception, because
+     * it associates the proxy itself with a new row.</p>
+     *
+     * @param authenticatedUsername the caller's login name
+     * @return that account's library id
+     */
+    private Long libraryIdOf(String authenticatedUsername) {
+        return authenticatedUser(authenticatedUsername).getLibrary().getId();
     }
 
     private BookResponse toResponse(Book book) {

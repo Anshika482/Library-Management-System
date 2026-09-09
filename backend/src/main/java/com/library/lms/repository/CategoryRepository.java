@@ -1,5 +1,8 @@
 package com.library.lms.repository;
 
+import java.util.List;
+import java.util.Optional;
+
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
@@ -32,7 +35,53 @@ public interface CategoryRepository extends JpaRepository<Category, Long> {
      * caller wants to know - the row itself is never needed, only whether the
      * name is taken.</p>
      */
-    boolean existsByNameIgnoreCase(String name);
+    /**
+     * Every category owned by one library, oldest first.
+     *
+     * <p>The tenant filter is part of the query, not something applied to the
+     * results afterwards. Fetching all rows and discarding the ones that belong
+     * to other libraries would read data the caller may not see and would get
+     * slower with every library added.</p>
+     *
+     * <p>{@code OrderByIdAsc} keeps the ordering the listing endpoint already
+     * had, which the previous {@code findAll(Sort.by(ASC, "id"))} supplied.</p>
+     *
+     * @param libraryId the owning library
+     * @return that library's categories, ordered by id
+     */
+    List<Category> findByLibraryIdOrderByIdAsc(Long libraryId);
+
+    /**
+     * One category, but only if it belongs to this library.
+     *
+     * <p>Scoping the lookup rather than loading the row and checking afterwards
+     * is what keeps the two failure cases identical. A category in another
+     * library and a category that was never created both return empty here, so
+     * the caller cannot tell them apart - and the row is never read at all,
+     * which means a refused update or delete cannot act on data it was refused.</p>
+     *
+     * @param id        the category wanted
+     * @param libraryId the caller's library
+     * @return the category, or empty if it is missing or belongs elsewhere
+     */
+    Optional<Category> findByIdAndLibraryId(Long id, Long libraryId);
+
+    /**
+     * Whether this library already has a category with this name.
+     *
+     * <p>Scoped, because a name is only a duplicate within one library. Two
+     * libraries both wanting "Fiction" is the normal case, not a clash, and the
+     * global check this replaces refused the second one.</p>
+     *
+     * <p>{@code IgnoreCase} matches the column's {@code utf8mb4_0900_ai_ci}
+     * collation, so this check and the {@code uk_categories_library_name}
+     * constraint agree on what counts as the same name.</p>
+     *
+     * @param libraryId the caller's library
+     * @param name      the trimmed name being claimed
+     * @return true if that library already uses the name
+     */
+    boolean existsByLibraryIdAndNameIgnoreCase(Long libraryId, String name);
 
     /**
      * The same question, but ignoring one category - the one being renamed.
@@ -47,9 +96,9 @@ public interface CategoryRepository extends JpaRepository<Category, Long> {
      * is excluded from the search and only a <i>different</i> category holding
      * the name is reported.</p>
      *
-     * <p>This does not replace {@code existsByNameIgnoreCase} above - create
-     * has no id to exclude, and passing null would make the {@code id <> ?}
-     * comparison never true, silently disabling the check.</p>
+     * <p>This does not replace {@code existsByLibraryIdAndNameIgnoreCase}
+     * above - create has no id to exclude, and passing null would make the
+     * {@code id <> ?} comparison never true, silently disabling the check.</p>
      */
-    boolean existsByNameIgnoreCaseAndIdNot(String name, Long id);
+    boolean existsByLibraryIdAndNameIgnoreCaseAndIdNot(Long libraryId, String name, Long id);
 }

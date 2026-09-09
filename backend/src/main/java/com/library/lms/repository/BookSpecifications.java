@@ -55,6 +55,24 @@ public final class BookSpecifications {
      * categories were normalised and can drift out of date if a category is
      * renamed.</p>
      */
+    /**
+     * Restricts a query to one library's shelves.
+     *
+     * <p>This is the tenant filter, and it is the one predicate that must be
+     * present on every book query. The others narrow a result set the caller is
+     * already entitled to see; this one decides entitlement. Composing it in the
+     * service rather than leaving it optional means paging, keyword search and
+     * category filtering are all scoped by the same clause, in the database,
+     * rather than each remembering to filter for itself.</p>
+     *
+     * @param libraryId the caller's library
+     * @return a predicate matching only that library's books
+     */
+    public static Specification<Book> belongsToLibrary(Long libraryId) {
+        return (root, query, criteriaBuilder) ->
+                criteriaBuilder.equal(root.get("library").get("id"), libraryId);
+    }
+
     public static Specification<Book> hasCategory(Long categoryId) {
         return (root, query, criteriaBuilder) ->
                 criteriaBuilder.equal(root.get("category").get("id"), categoryId);

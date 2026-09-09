@@ -4,6 +4,7 @@ import java.util.List;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -48,8 +49,8 @@ public class CategoryController {
      * an error, so it answers with an empty array rather than a 404.</p>
      */
     @GetMapping
-    public ResponseEntity<List<CategoryResponse>> getAllCategories() {
-        List<CategoryResponse> categories = categoryService.getAllCategories();
+    public ResponseEntity<List<CategoryResponse>> getAllCategories(Authentication authentication) {
+        List<CategoryResponse> categories = categoryService.getAllCategories(authentication.getName());
         return ResponseEntity.ok(categories);
     }
 
@@ -66,8 +67,10 @@ public class CategoryController {
      * {@code categoryId} when creating a book.</p>
      */
     @PostMapping
-    public ResponseEntity<CategoryResponse> createCategory(@Valid @RequestBody CategoryRequest categoryRequest) {
-        CategoryResponse createdCategory = categoryService.createCategory(categoryRequest);
+    public ResponseEntity<CategoryResponse> createCategory(@Valid @RequestBody CategoryRequest categoryRequest,
+                                                           Authentication authentication) {
+        CategoryResponse createdCategory =
+                categoryService.createCategory(categoryRequest, authentication.getName());
         return ResponseEntity.status(HttpStatus.CREATED).body(createdCategory);
     }
 
@@ -85,8 +88,10 @@ public class CategoryController {
      */
     @PutMapping("/{id}")
     public ResponseEntity<CategoryResponse> updateCategory(@PathVariable Long id,
-                                                           @Valid @RequestBody CategoryRequest categoryRequest) {
-        CategoryResponse updatedCategory = categoryService.updateCategory(id, categoryRequest);
+                                                           @Valid @RequestBody CategoryRequest categoryRequest,
+                                                           Authentication authentication) {
+        CategoryResponse updatedCategory =
+                categoryService.updateCategory(id, categoryRequest, authentication.getName());
         return ResponseEntity.ok(updatedCategory);
     }
 
@@ -104,8 +109,8 @@ public class CategoryController {
      * it. Those books must be moved to another category first.</p>
      */
     @DeleteMapping("/{id}")
-    public ResponseEntity<Void> deleteCategory(@PathVariable Long id) {
-        categoryService.deleteCategory(id);
+    public ResponseEntity<Void> deleteCategory(@PathVariable Long id, Authentication authentication) {
+        categoryService.deleteCategory(id, authentication.getName());
         return ResponseEntity.noContent().build();
     }
 }

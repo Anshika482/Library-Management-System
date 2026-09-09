@@ -47,6 +47,51 @@ public interface BookRepository extends JpaRepository<Book, Long>, JpaSpecificat
      * is the right type here precisely because {@code isbn} is unique - at most
      * one row can ever come back.</p>
      */
+    /**
+     * One book, but only if it belongs to this library.
+     *
+     * <p>Scoping the lookup rather than loading the row and checking afterwards
+     * is what keeps the two failure cases identical. A book in another library
+     * and a book that was never created both return empty here, so a caller
+     * cannot tell them apart - and the row is never read at all, which means a
+     * refused update or delete cannot act on data it was refused.</p>
+     *
+     * @param id        the book wanted
+     * @param libraryId the caller's library
+     * @return the book, or empty if it is missing or belongs elsewhere
+     */
+    Optional<Book> findByIdAndLibraryId(Long id, Long libraryId);
+
+    /**
+     * Every book on one library's shelves, matched by category name.
+     *
+     * <p>The library comes first in the method name and in the query, so the
+     * category name is only ever matched within the caller's own tenant. Without
+     * it, two libraries that both have a "Fiction" shelf would see each other's
+     * stock.</p>
+     *
+     * @param libraryId the caller's library
+     * @param name      the category name to match
+     * @return that library's books in that category
+     */
+    List<Book> findByLibraryIdAndCategoryName(Long libraryId, String name);
+
+    /**
+     * One book by ISBN within a library.
+     *
+     * <p>Declared for the library-scoped duplicate check that arrives with the
+     * composite {@code UNIQUE(library_id, isbn)} constraint. It is deliberately
+     * not wired up yet: the database still enforces ISBN uniqueness globally, so
+     * a service check narrower than the constraint would pass a duplicate the
+     * database then rejects, turning a clean 400 into a 409. The two change
+     * together, not separately.</p>
+     *
+     * @param isbn      the ISBN to look for
+     * @param libraryId the library to look in
+     * @return the matching book within that library, if any
+     */
+    Optional<Book> findByIsbnAndLibraryId(String isbn, Long libraryId);
+
     Optional<Book> findByIsbn(String isbn);
 
     /**

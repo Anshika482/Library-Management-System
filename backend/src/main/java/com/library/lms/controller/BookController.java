@@ -4,6 +4,7 @@ import java.util.List;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -109,9 +110,11 @@ public class BookController {
             @RequestParam(defaultValue = "id") String sortBy,
             @RequestParam(defaultValue = "asc") String direction,
             @RequestParam(required = false) String keyword,
-            @RequestParam(required = false) Long categoryId) {
+            @RequestParam(required = false) Long categoryId,
+            Authentication authentication) {
         PagedResponse<BookResponse> books =
-                bookService.getAllBooks(page, size, sortBy, direction, keyword, categoryId);
+                bookService.getAllBooks(page, size, sortBy, direction, keyword, categoryId,
+                        authentication.getName());
         return ResponseEntity.ok(books);
     }
 
@@ -125,8 +128,8 @@ public class BookController {
      * BookNotFoundException, which GlobalExceptionHandler turns into a 404.</p>
      */
     @GetMapping("/{id}")
-    public ResponseEntity<BookResponse> getBookById(@PathVariable Long id) {
-        BookResponse book = bookService.getBookById(id);
+    public ResponseEntity<BookResponse> getBookById(@PathVariable Long id, Authentication authentication) {
+        BookResponse book = bookService.getBookById(id, authentication.getName());
         return ResponseEntity.ok(book);
     }
 
@@ -146,8 +149,9 @@ public class BookController {
      * is a successful search, not a 404.</p>
      */
     @GetMapping("/search")
-    public ResponseEntity<List<BookResponse>> searchBooks(@RequestParam String keyword) {
-        List<BookResponse> books = bookService.searchBooks(keyword);
+    public ResponseEntity<List<BookResponse>> searchBooks(@RequestParam String keyword,
+                                                         Authentication authentication) {
+        List<BookResponse> books = bookService.searchBooks(keyword, authentication.getName());
         return ResponseEntity.ok(books);
     }
 
@@ -161,8 +165,9 @@ public class BookController {
      * <p>Also always 200 OK with a possibly empty array.</p>
      */
     @GetMapping("/category/{category}")
-    public ResponseEntity<List<BookResponse>> getBooksByCategory(@PathVariable String category) {
-        List<BookResponse> books = bookService.getBooksByCategory(category);
+    public ResponseEntity<List<BookResponse>> getBooksByCategory(@PathVariable String category,
+                                                                 Authentication authentication) {
+        List<BookResponse> books = bookService.getBooksByCategory(category, authentication.getName());
         return ResponseEntity.ok(books);
     }
 
@@ -181,8 +186,9 @@ public class BookController {
      * for. The returned BookResponse carries the id the database generated.</p>
      */
     @PostMapping
-    public ResponseEntity<BookResponse> createBook(@Valid @RequestBody BookRequest bookRequest) {
-        BookResponse createdBook = bookService.createBook(bookRequest);
+    public ResponseEntity<BookResponse> createBook(@Valid @RequestBody BookRequest bookRequest,
+                                                  Authentication authentication) {
+        BookResponse createdBook = bookService.createBook(bookRequest, authentication.getName());
         return ResponseEntity.status(HttpStatus.CREATED).body(createdBook);
     }
 
@@ -199,8 +205,9 @@ public class BookController {
      */
     @PutMapping("/{id}")
     public ResponseEntity<BookResponse> updateBook(@PathVariable Long id,
-                                                   @Valid @RequestBody BookRequest bookRequest) {
-        BookResponse updatedBook = bookService.updateBook(id, bookRequest);
+                                                   @Valid @RequestBody BookRequest bookRequest,
+                                                   Authentication authentication) {
+        BookResponse updatedBook = bookService.updateBook(id, bookRequest, authentication.getName());
         return ResponseEntity.ok(updatedBook);
     }
 
@@ -212,8 +219,8 @@ public class BookController {
      * {@code Void} and the body is left empty.</p>
      */
     @DeleteMapping("/{id}")
-    public ResponseEntity<Void> deleteBook(@PathVariable Long id) {
-        bookService.deleteBook(id);
+    public ResponseEntity<Void> deleteBook(@PathVariable Long id, Authentication authentication) {
+        bookService.deleteBook(id, authentication.getName());
         return ResponseEntity.noContent().build();
     }
 }

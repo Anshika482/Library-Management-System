@@ -2,6 +2,7 @@ package com.library.lms.entity;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
@@ -91,6 +92,45 @@ public class Book {
     @ManyToOne
     @JoinColumn(name = "category_id")
     private Category category;
+
+    /**
+     * The library that owns this copy of the title.
+     *
+     * <p>This is the tenant boundary for the catalogue. Once every book carries
+     * one, a caller from one library will not be able to read, edit or delete
+     * another library's stock, because every query will be scoped by this value
+     * rather than by an id the caller supplied.</p>
+     *
+     * <p><b>Required.</b> The column arrived nullable because a NOT NULL column
+     * with no default cannot be added to a populated table under
+     * {@code STRICT_TRANS_TABLES}; the 25 existing rows were then backfilled to
+     * the default library and the column tightened. Both sides now agree that
+     * every book belongs to a library.</p>
+     *
+     * <p>{@code optional = false} as well as {@code nullable = false}: the
+     * {@code @JoinColumn} setting describes the column, while {@code optional}
+     * tells Hibernate the association is always present, so it can plan an inner
+     * join and reject a book with no library before the statement reaches the
+     * database rather than after it returns as a constraint violation.</p>
+     *
+     * <p>{@code LAZY}, unlike the EAGER {@link Category} above, and the
+     * difference is deliberate. The category is read on every response to supply
+     * its name; the library is not part of any response, so fetching it with
+     * each book would be work nothing consumes.</p>
+     *
+     * <p>{@code @ToString.Exclude} because with {@code open-in-view=false} the
+     * session closes at the end of the service layer, so a {@code toString()} on
+     * a detached Book would try to initialise this proxy with nothing to
+     * initialise it from and throw. A log line should never fail a request.</p>
+     *
+     * <p>No cascade and no orphanRemoval: a library outlives its books, and
+     * saving or deleting a book must never reach across to the tenant that owns
+     * it.</p>
+     */
+    @ToString.Exclude
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "library_id", nullable = false)
+    private Library library;
 
     /** How many copies the library owns in total. */
     @Column(name = "total_copies", nullable = false)

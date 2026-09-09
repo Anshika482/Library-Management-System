@@ -2,17 +2,21 @@ package com.library.lms.service;
 
 import java.util.List;
 
-import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import com.library.lms.dto.CategoryRequest;
 import com.library.lms.dto.CategoryResponse;
 import com.library.lms.entity.Category;
+import com.library.lms.entity.Library;
+import com.library.lms.entity.User;
 import com.library.lms.exception.CategoryInUseException;
 import com.library.lms.exception.CategoryNotFoundException;
 import com.library.lms.exception.DuplicateCategoryException;
+import com.library.lms.exception.UserNotFoundException;
 import com.library.lms.repository.BookRepository;
 import com.library.lms.repository.CategoryRepository;
+import com.library.lms.repository.UserRepository;
 
 /**
  * Business logic for reading categories.
@@ -42,9 +46,13 @@ public class CategoryService {
      */
     private final BookRepository bookRepository;
 
-    public CategoryService(CategoryRepository categoryRepository, BookRepository bookRepository) {
+    private final UserRepository userRepository;
+
+    public CategoryService(CategoryRepository categoryRepository, BookRepository bookRepository,
+                           UserRepository userRepository) {
         this.categoryRepository = categoryRepository;
         this.bookRepository = bookRepository;
+        this.userRepository = userRepository;
     }
 
     /**
@@ -59,8 +67,10 @@ public class CategoryService {
      *
      * <p>An empty table gives an empty list, never null.</p>
      */
-    public List<CategoryResponse> getAllCategories() {
-        return categoryRepository.findAll(Sort.by(Sort.Direction.ASC, "id"))
+    public List<CategoryResponse> getAllCategories(String authenticatedUsername) {
+        Long libraryId = authenticatedUser(authenticatedUsername).getLibrary().getId();
+
+        return categoryRepository.findByLibraryIdOrderByIdAsc(libraryId)
                 .stream()
                 .map(this::toResponse)
                 .toList();
@@ -84,17 +94,48 @@ public class CategoryService {
      * written: {@link DuplicateCategoryException} is thrown before
      * {@code save()}, so the existing category is left exactly as it was.</p>
      *
+     * <p><b>The owning library comes from the caller, not the request.</b>
+     * {@code CategoryRequest} carries a name and nothing else, deliberately: a
+     * libraryId in the body would let any authenticated user file a category
+     * into another library by changing a number. The library is read from the
+     * account behind {@code authenticatedUsername}, which the controller takes
+     * from the authenticated principal.</p>
+     *
+     * <p>{@code @Transactional} is needed here, and only became so with that
+     * lookup. {@code User.library} is a LAZY association and
+     * {@code open-in-view} is off, so without a surrounding transaction the
+     * account would be loaded and detached in one repository call and the
+     * library proxy would be dead by the time {@code save()} ran in the next.
+     * One transaction keeps the load and the write in the same persistence
+     * context. It also makes the pair atomic, though with a single write that
+     * is a secondary benefit.</p>
+     *
+     * @param request               the submitted name
+     * @param authenticatedUsername the caller's login name, which the caller
+     *                              must take from the authenticated principal
      * @throws DuplicateCategoryException if the name is already taken
+     * @throws UserNotFoundException      if the authenticated name matches no
+     *                                    account
      */
-    public CategoryResponse createCategory(CategoryRequest request) {
+    @Transactional
+    public CategoryResponse createCategory(CategoryRequest request, String authenticatedUsername) {
         String name = request.getName().trim();
 
-        if (categoryRepository.existsByNameIgnoreCase(name)) {
+        // The owning library is read from the caller's own account, never from
+        // the request. A libraryId in the body would let any authenticated user
+        // file a category into somebody else's library by changing a number.
+        Library library = authenticatedUser(authenticatedUsername).getLibrary();
+
+        // Scoped to that library. Another library holding this name is not a
+        // clash, and treating it as one is what the global check got wrong: the
+        // second library could never create its own "Fiction".
+        if (categoryRepository.existsByLibraryIdAndNameIgnoreCase(library.getId(), name)) {
             throw new DuplicateCategoryException(name);
         }
 
         Category category = new Category();
         category.setName(name);
+        category.setLibrary(library);
 
         return toResponse(categoryRepository.save(category));
     }
@@ -126,13 +167,15 @@ public class CategoryService {
      * @throws CategoryNotFoundException  if no category has this id
      * @throws DuplicateCategoryException if another category already uses the name
      */
-    public CategoryResponse updateCategory(Long id, CategoryRequest request) {
-        Category existingCategory = categoryRepository.findById(id)
+    public CategoryResponse updateCategory(Long id, CategoryRequest request, String authenticatedUsername) {
+        Long libraryId = authenticatedUser(authenticatedUsername).getLibrary().getId();
+
+        Category existingCategory = categoryRepository.findByIdAndLibraryId(id, libraryId)
                 .orElseThrow(() -> new CategoryNotFoundException(id));
 
         String name = request.getName().trim();
 
-        if (categoryRepository.existsByNameIgnoreCaseAndIdNot(name, id)) {
+        if (categoryRepository.existsByLibraryIdAndNameIgnoreCaseAndIdNot(libraryId, name, id)) {
             throw new DuplicateCategoryException(name);
         }
 
@@ -165,8 +208,10 @@ public class CategoryService {
      * @throws CategoryNotFoundException if no category has this id
      * @throws CategoryInUseException    if at least one book references it
      */
-    public void deleteCategory(Long id) {
-        Category category = categoryRepository.findById(id)
+    public void deleteCategory(Long id, String authenticatedUsername) {
+        Long libraryId = authenticatedUser(authenticatedUsername).getLibrary().getId();
+
+        Category category = categoryRepository.findByIdAndLibraryId(id, libraryId)
                 .orElseThrow(() -> new CategoryNotFoundException(id));
 
         if (bookRepository.existsByCategoryId(id)) {
@@ -177,6 +222,28 @@ public class CategoryService {
     }
 
     /** Converts a stored entity into the object the API sends back. */
+    /**
+     * The account behind the authenticated name.
+     *
+     * <p>Every method in this class reaches its tenant through here, so the
+     * library is always derived from the caller the server authenticated and
+     * never from anything the request carried. One place to look also means one
+     * place to change if identity ever moves off the username.</p>
+     *
+     * <p>Callers that need only the tenant id take {@code .getLibrary().getId()}
+     * from the result. Reading a lazy proxy's identifier does not initialise it,
+     * so those paths need no transaction; {@link #createCategory} is the
+     * exception, because it associates the proxy itself with a new row.</p>
+     *
+     * @param authenticatedUsername the caller's login name
+     * @return the caller's account
+     * @throws UserNotFoundException if the authenticated name matches no account
+     */
+    private User authenticatedUser(String authenticatedUsername) {
+        return userRepository.findByUsername(authenticatedUsername)
+                .orElseThrow(() -> new UserNotFoundException(authenticatedUsername));
+    }
+
     private CategoryResponse toResponse(Category category) {
         return new CategoryResponse(category.getId(), category.getName());
     }
