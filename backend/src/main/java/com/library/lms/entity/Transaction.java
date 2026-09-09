@@ -6,6 +6,7 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
+import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
@@ -33,11 +34,11 @@ import lombok.ToString;
  * is there - leaving it out would mean the entity could never read or write a
  * value that the table can already hold.</p>
  *
- * <p>Both relationships are deliberately <b>unidirectional</b>: a Transaction
- * knows its Book and its User, but neither of them holds a collection of
- * transactions. A book borrowed for years would otherwise carry an unbounded
- * list that JPA wants to manage, and nothing in the application needs to walk
- * the association in that direction.</p>
+ * <p>All three relationships are deliberately <b>unidirectional</b>: a
+ * Transaction knows its Book, its User and its Library, but none of them holds
+ * a collection of transactions. A book borrowed for years would otherwise
+ * carry an unbounded list that JPA wants to manage, and nothing in the
+ * application needs to walk the association in that direction.</p>
  *
  * <p>There is no cascade and no orphanRemoval, which matters more than it looks:
  * with cascade, deleting a transaction record could delete the book or the
@@ -80,6 +81,27 @@ public class Transaction {
     @ManyToOne
     @JoinColumn(name = "user_id", nullable = false)
     private User user;
+
+    /**
+     * The library this borrowing belongs to.
+     *
+     * <p>A transaction can already reach a library two ways - through its book
+     * and through its user - and nothing makes those two agree. Recording the
+     * owner directly gives the row one answer instead of two that may differ,
+     * which is what lets a later step scope every query with a single
+     * predicate.</p>
+     *
+     * <p>{@code LAZY}, no cascade, no orphanRemoval, and excluded from
+     * {@code toString()} - the same reasoning as the matching field on
+     * {@link Book}, {@link Category} and {@link User}. With
+     * {@code open-in-view=false} an eager {@code toString()} on a detached
+     * Transaction would try to initialise this proxy after the session has
+     * closed and throw.</p>
+     */
+    @ToString.Exclude
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "library_id", nullable = false)
+    private Library library;
 
     /** The day the book went out. Required. */
     @Column(name = "issue_date", nullable = false)
