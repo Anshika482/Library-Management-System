@@ -328,4 +328,31 @@ class TransactionServiceIssueBookTest {
         assertThat(body.status()).isEqualTo(400);
         assertThat(body.message()).contains("2020-01-01").contains("2026-01-01");
     }
+
+    @Test
+    void anIssuedLoanNeverCarriesAReturnDate() {
+        // The mirror of the RETURNED invariant in
+        // TransactionServiceReturnBookTest, stated as one relationship rather
+        // than two assertions that merely happen to sit in the same test: an
+        // open loan is ISSUED and has no return date, and nothing about a
+        // freshly created loan may say otherwise.
+        when(userRepository.findByUsername(AUTHENTICATED_USERNAME)).thenReturn(Optional.of(borrower()));
+        when(bookRepository.findByIdAndLibraryId(BOOK_ID, LIBRARY_ID))
+                .thenReturn(Optional.of(availableBook(3)));
+        echoSavedTransaction();
+
+        transactionService.issueBook(BOOK_ID, AUTHENTICATED_USERNAME, LocalDate.now().plusDays(14));
+
+        ArgumentCaptor<Transaction> captor = ArgumentCaptor.forClass(Transaction.class);
+        verify(transactionRepository).save(captor.capture());
+        Transaction saved = captor.getValue();
+
+        boolean issuedWithAReturnDate =
+                saved.getStatus() == TransactionStatus.ISSUED && saved.getReturnDate() != null;
+        assertThat(issuedWithAReturnDate)
+                .as("ISSUED with a return date must never be written")
+                .isFalse();
+        assertThat(saved.getStatus()).isEqualTo(TransactionStatus.ISSUED);
+        assertThat(saved.getReturnDate()).isNull();
+    }
 }
