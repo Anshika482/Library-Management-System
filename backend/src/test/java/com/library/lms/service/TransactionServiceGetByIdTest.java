@@ -16,6 +16,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.library.lms.dto.TransactionResponse;
 import com.library.lms.entity.Book;
+import com.library.lms.entity.Library;
 import com.library.lms.entity.Role;
 import com.library.lms.entity.Transaction;
 import com.library.lms.entity.TransactionStatus;
@@ -47,6 +48,9 @@ class TransactionServiceGetByIdTest {
 
     private static final Long OTHER_USER_ID = 99L;
 
+    /** The caller's own library. Every fixture below belongs to it. */
+    private static final Long LIBRARY_ID = 1L;
+
     @Mock
     private TransactionRepository transactionRepository;
 
@@ -59,11 +63,18 @@ class TransactionServiceGetByIdTest {
     @InjectMocks
     private TransactionService transactionService;
 
+    private static Library library(Long id) {
+        Library library = new Library();
+        library.setId(id);
+        return library;
+    }
+
     private static User account(Long id, String username, Role role) {
         User user = new User();
         user.setId(id);
         user.setUsername(username);
         user.setRole(role);
+        user.setLibrary(library(LIBRARY_ID));
         return user;
     }
 
@@ -78,6 +89,7 @@ class TransactionServiceGetByIdTest {
         transaction.setId(TRANSACTION_ID);
         transaction.setBook(book);
         transaction.setUser(owner);
+        transaction.setLibrary(library(LIBRARY_ID));
         transaction.setIssueDate(LocalDate.now());
         transaction.setDueDate(LocalDate.now().plusDays(14));
         transaction.setStatus(TransactionStatus.ISSUED);
@@ -91,7 +103,7 @@ class TransactionServiceGetByIdTest {
     @Test
     void adminMayReadAnotherUsersTransaction() {
         authenticatedAs("an-admin", 1L, Role.ROLE_ADMIN);
-        when(transactionRepository.findById(TRANSACTION_ID)).thenReturn(Optional.of(loanOwnedBy(OTHER_USER_ID)));
+        when(transactionRepository.findByIdAndLibraryId(TRANSACTION_ID, LIBRARY_ID)).thenReturn(Optional.of(loanOwnedBy(OTHER_USER_ID)));
 
         TransactionResponse response = transactionService.getTransactionById(TRANSACTION_ID, "an-admin");
 
@@ -102,7 +114,7 @@ class TransactionServiceGetByIdTest {
     @Test
     void librarianMayReadAnotherUsersTransaction() {
         authenticatedAs("a-librarian", 2L, Role.ROLE_LIBRARIAN);
-        when(transactionRepository.findById(TRANSACTION_ID)).thenReturn(Optional.of(loanOwnedBy(OTHER_USER_ID)));
+        when(transactionRepository.findByIdAndLibraryId(TRANSACTION_ID, LIBRARY_ID)).thenReturn(Optional.of(loanOwnedBy(OTHER_USER_ID)));
 
         TransactionResponse response = transactionService.getTransactionById(TRANSACTION_ID, "a-librarian");
 
@@ -112,7 +124,7 @@ class TransactionServiceGetByIdTest {
     @Test
     void memberMayReadTheirOwnTransaction() {
         authenticatedAs("a-member", OWN_USER_ID, Role.ROLE_MEMBER);
-        when(transactionRepository.findById(TRANSACTION_ID)).thenReturn(Optional.of(loanOwnedBy(OWN_USER_ID)));
+        when(transactionRepository.findByIdAndLibraryId(TRANSACTION_ID, LIBRARY_ID)).thenReturn(Optional.of(loanOwnedBy(OWN_USER_ID)));
 
         TransactionResponse response = transactionService.getTransactionById(TRANSACTION_ID, "a-member");
 
@@ -123,7 +135,7 @@ class TransactionServiceGetByIdTest {
     @Test
     void memberMayNotReadAnotherUsersTransaction() {
         authenticatedAs("a-member", OWN_USER_ID, Role.ROLE_MEMBER);
-        when(transactionRepository.findById(TRANSACTION_ID)).thenReturn(Optional.of(loanOwnedBy(OTHER_USER_ID)));
+        when(transactionRepository.findByIdAndLibraryId(TRANSACTION_ID, LIBRARY_ID)).thenReturn(Optional.of(loanOwnedBy(OTHER_USER_ID)));
 
         assertThatThrownBy(() -> transactionService.getTransactionById(TRANSACTION_ID, "a-member"))
                 .isInstanceOf(TransactionAccessDeniedException.class)
@@ -133,7 +145,7 @@ class TransactionServiceGetByIdTest {
     @Test
     void refusalCarriesNoDetailOfTheTransactionItRefused() {
         authenticatedAs("a-member", OWN_USER_ID, Role.ROLE_MEMBER);
-        when(transactionRepository.findById(TRANSACTION_ID)).thenReturn(Optional.of(loanOwnedBy(OTHER_USER_ID)));
+        when(transactionRepository.findByIdAndLibraryId(TRANSACTION_ID, LIBRARY_ID)).thenReturn(Optional.of(loanOwnedBy(OTHER_USER_ID)));
 
         Throwable refusal = catchThrowable(
                 () -> transactionService.getTransactionById(TRANSACTION_ID, "a-member"));
@@ -152,8 +164,8 @@ class TransactionServiceGetByIdTest {
         // must be the same object type and the same message, so walking ids
         // reveals nothing about which of them are real.
         authenticatedAs("a-member", OWN_USER_ID, Role.ROLE_MEMBER);
-        when(transactionRepository.findById(TRANSACTION_ID)).thenReturn(Optional.of(loanOwnedBy(OTHER_USER_ID)));
-        when(transactionRepository.findById(12345L)).thenReturn(Optional.empty());
+        when(transactionRepository.findByIdAndLibraryId(TRANSACTION_ID, LIBRARY_ID)).thenReturn(Optional.of(loanOwnedBy(OTHER_USER_ID)));
+        when(transactionRepository.findByIdAndLibraryId(12345L, LIBRARY_ID)).thenReturn(Optional.empty());
 
         Throwable foreign = catchThrowable(
                 () -> transactionService.getTransactionById(TRANSACTION_ID, "a-member"));
@@ -171,7 +183,7 @@ class TransactionServiceGetByIdTest {
         // The anti-enumeration collapse applies to members only; staff keep the
         // more useful answer.
         authenticatedAs("an-admin", 1L, Role.ROLE_ADMIN);
-        when(transactionRepository.findById(12345L)).thenReturn(Optional.empty());
+        when(transactionRepository.findByIdAndLibraryId(12345L, LIBRARY_ID)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> transactionService.getTransactionById(12345L, "an-admin"))
                 .isInstanceOf(TransactionNotFoundException.class);
@@ -182,7 +194,7 @@ class TransactionServiceGetByIdTest {
         // A member whose username is the digits of the owning user's id. A
         // name-against-id comparison would let this through.
         authenticatedAs(String.valueOf(OTHER_USER_ID), OWN_USER_ID, Role.ROLE_MEMBER);
-        when(transactionRepository.findById(TRANSACTION_ID)).thenReturn(Optional.of(loanOwnedBy(OTHER_USER_ID)));
+        when(transactionRepository.findByIdAndLibraryId(TRANSACTION_ID, LIBRARY_ID)).thenReturn(Optional.of(loanOwnedBy(OTHER_USER_ID)));
 
         assertThatThrownBy(() -> transactionService.getTransactionById(TRANSACTION_ID,
                 String.valueOf(OTHER_USER_ID)))
@@ -195,7 +207,7 @@ class TransactionServiceGetByIdTest {
         // wrongly refuse a member reading their own loan.
         Long largeId = 100_000L;
         authenticatedAs("a-member", largeId, Role.ROLE_MEMBER);
-        when(transactionRepository.findById(TRANSACTION_ID))
+        when(transactionRepository.findByIdAndLibraryId(TRANSACTION_ID, LIBRARY_ID))
                 .thenReturn(Optional.of(loanOwnedBy(Long.valueOf(100_000L))));
 
         TransactionResponse response = transactionService.getTransactionById(TRANSACTION_ID, "a-member");
@@ -208,7 +220,7 @@ class TransactionServiceGetByIdTest {
         authenticatedAs("a-member", OWN_USER_ID, Role.ROLE_MEMBER);
         Transaction orphan = loanOwnedBy(OWN_USER_ID);
         orphan.setUser(null);
-        when(transactionRepository.findById(TRANSACTION_ID)).thenReturn(Optional.of(orphan));
+        when(transactionRepository.findByIdAndLibraryId(TRANSACTION_ID, LIBRARY_ID)).thenReturn(Optional.of(orphan));
 
         assertThatThrownBy(() -> transactionService.getTransactionById(TRANSACTION_ID, "a-member"))
                 .isInstanceOf(TransactionAccessDeniedException.class);

@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.library.lms.dto.TransactionResponse;
 import com.library.lms.entity.Book;
+import com.library.lms.entity.Library;
 import com.library.lms.entity.Role;
 import com.library.lms.entity.Transaction;
 import com.library.lms.entity.TransactionStatus;
@@ -34,6 +35,13 @@ import com.library.lms.repository.UserRepository;
  *
  * <p>Constructor injection with final fields, exactly as {@link BookService}
  * and {@link CategoryService} do.</p>
+ *
+ * <p>Every method here is scoped to one library - the caller's own, resolved
+ * from the authenticated login name by {@link #authenticatedUser}. No method
+ * accepts a library from the client, and no transaction lookup in this class is
+ * unscoped, so a caller can neither read nor alter another library's loans.
+ * Role and ownership rules still apply <i>within</i> that library and are
+ * unchanged: the tenant boundary sits underneath them, not instead of them.</p>
  */
 @Service
 public class TransactionService {
@@ -83,24 +91,39 @@ public class TransactionService {
      * a caller to supply one, and issuing a book to an account chosen by the
      * requester is the flaw this signature exists to prevent.</p>
      *
+     * <p>That same name decides the library. The book is looked up within the
+     * caller's own tenant, so a book id from another library is refused as
+     * missing rather than borrowed, and the loan that is written records the
+     * owning library explicitly.</p>
+     *
      * @param bookId   the book to issue
      * @param username the authenticated borrower's login name
      * @param dueDate  when it must come back, decided by the caller
      * @return the saved loan, carrying the id the database generated
-     * @throws BookNotFoundException     if no book has this id
+     * @throws BookNotFoundException     if the caller's library has no book with
+     *                                   this id - including when the book exists
+     *                                   in another library
      * @throws UserNotFoundException     if no account has this login name
      * @throws BookNotAvailableException if every copy is already on loan
      */
     @Transactional
     public TransactionResponse issueBook(Long bookId, String username, LocalDate dueDate) {
-        Book book = bookRepository.findById(bookId)
-                .orElseThrow(() -> new BookNotFoundException(bookId));
-
         // Resolved from the authenticated name, never from anything the caller
         // sent. The account is read again rather than trusted from the token,
         // so a deleted or renamed user cannot still borrow on an old session.
-        User user = userRepository.findByUsername(username)
-                .orElseThrow(() -> new UserNotFoundException(username));
+        // It is now resolved first as well: the caller's library is what scopes
+        // the book lookup below, so it must be known before any book is read.
+        User user = authenticatedUser(username);
+        Library library = user.getLibrary();
+
+        // Scoped to the caller's own library, which closes the worst of the
+        // cross-library holes. Unscoped, a librarian could name any book id in
+        // the database and the decrement below would come out of another
+        // library's stock - a write into a tenant they have no business
+        // touching. A book belonging elsewhere now fails exactly as one that
+        // was never created, so the refusal reveals nothing either way.
+        Book book = bookRepository.findByIdAndLibraryId(bookId, library.getId())
+                .orElseThrow(() -> new BookNotFoundException(bookId));
 
         Integer availableCopies = book.getAvailableCopies();
 
@@ -120,6 +143,14 @@ public class TransactionService {
         Transaction transaction = new Transaction();
         transaction.setBook(book);
         transaction.setUser(user);
+
+        // The owning library comes from the caller's own account, never from
+        // the request. Because the book was fetched within that same library
+        // and the borrower is that same account, the three agree by
+        // construction rather than by a check afterwards:
+        // transaction.library == user.library == book.library.
+        transaction.setLibrary(library);
+
         transaction.setIssueDate(LocalDate.now());
         transaction.setDueDate(dueDate);
 
@@ -149,14 +180,33 @@ public class TransactionService {
      * a later step, and quietly writing a zero here would be indistinguishable
      * from a fine that had been calculated and found to be nil.</p>
      *
-     * @param transactionId the loan being closed
+     * <p>The loan is fetched within the caller's own library. Before that this
+     * method took no authenticated name at all, so any staff member could close
+     * any loan in the database and push a copy back onto another library's
+     * shelf. Scoping the lookup refuses that before the book is read, which is
+     * what leaves the other library's counts untouched.</p>
+     *
+     * <p>No ownership rule is added here. Who may return a book is still
+     * decided by the role rules in the security configuration, exactly as
+     * before; the only new restriction is the tenant boundary.</p>
+     *
+     * @param transactionId         the loan being closed
+     * @param authenticatedUsername the caller's login name, which the caller
+     *                              must take from the authenticated principal
      * @return the updated loan
-     * @throws TransactionNotFoundException   if no transaction has this id
+     * @throws UserNotFoundException          if the authenticated name matches
+     *                                        no account
+     * @throws TransactionNotFoundException   if the caller's library has no loan
+     *                                        with this id - including when the
+     *                                        loan exists in another library
      * @throws ReturnBookNotAllowedException  if it is not in a returnable state
      */
     @Transactional
-    public TransactionResponse returnBook(Long transactionId) {
-        Transaction transaction = transactionRepository.findById(transactionId)
+    public TransactionResponse returnBook(Long transactionId, String authenticatedUsername) {
+        Long libraryId = authenticatedUser(authenticatedUsername).getLibrary().getId();
+
+        Transaction transaction = transactionRepository
+                .findByIdAndLibraryId(transactionId, libraryId)
                 .orElseThrow(() -> new TransactionNotFoundException(transactionId));
 
         // Only an open loan can be closed. Checking for ISSUED rather than
@@ -208,9 +258,11 @@ public class TransactionService {
      * <p>Read-only, so no {@code @Transactional}: a single query needs no
      * transaction boundary, and adding one would imply this method writes.</p>
      *
-     * <p>ADMIN and LIBRARIAN may read any loan and get the usual 404 for an id
-     * that is not there. A MEMBER may read only a loan whose borrower is their
-     * own account, decided by comparing database ids.</p>
+     * <p>ADMIN and LIBRARIAN may read any loan <b>in their own library</b> and
+     * get the usual 404 for an id that is not there. A MEMBER may read only a
+     * loan whose borrower is their own account, decided by comparing database
+     * ids. Neither role can reach across libraries: the query is scoped before
+     * either rule is applied.</p>
      *
      * <p><b>A member is told the same thing either way.</b> An id that does not
      * exist and an id belonging to someone else both raise
@@ -226,17 +278,23 @@ public class TransactionService {
      * @return the loan, mapped to a response
      * @throws UserNotFoundException            if the authenticated name matches
      *                                          no account
-     * @throws TransactionNotFoundException     if staff ask for an id that is not
-     *                                          there
+     * @throws TransactionNotFoundException     if staff ask for an id their
+     *                                          library does not hold - including
+     *                                          one that exists elsewhere
      * @throws TransactionAccessDeniedException if a member asks for a loan that
      *                                          is not theirs, or one that does
      *                                          not exist
      */
     public TransactionResponse getTransactionById(Long transactionId, String authenticatedUsername) {
-        User authenticatedUser = userRepository.findByUsername(authenticatedUsername)
-                .orElseThrow(() -> new UserNotFoundException(authenticatedUsername));
+        User authenticatedUser = authenticatedUser(authenticatedUsername);
 
-        Optional<Transaction> transaction = transactionRepository.findById(transactionId);
+        // Scoped first, so everything below reasons only about loans the
+        // caller's library actually holds. A loan from another library is not
+        // filtered out after being read - it is never returned by the query,
+        // which is why staff see it as an ordinary missing id and a member sees
+        // the same refusal they get for any loan that is not theirs.
+        Optional<Transaction> transaction = transactionRepository
+                .findByIdAndLibraryId(transactionId, authenticatedUser.getLibrary().getId());
 
         if (maySeeAnyUsersActivity(authenticatedUser)) {
             return toResponse(transaction
@@ -262,12 +320,49 @@ public class TransactionService {
      * has happened to this book?" and getting nothing back is a valid answer,
      * and checking the book exists first would cost an extra query to change a
      * 200 into a 404 without telling the caller anything more useful.</p>
+     *
+     * <p>A book belonging to another library gets that same empty list, which
+     * is why no book lookup happens here at all. Loading the book to decide
+     * whether it exists would create the very distinction this endpoint must
+     * not offer: an empty list for a book nobody borrowed and a 404 for a book
+     * in the next library would let a caller map another tenant's catalogue one
+     * id at a time.</p>
+     *
+     * @param bookId                the book whose history is wanted
+     * @param authenticatedUsername the caller's login name, which the caller
+     *                              must take from the authenticated principal
+     * @return that book's loans within the caller's library
+     * @throws UserNotFoundException if the authenticated name matches no account
      */
-    public List<TransactionResponse> getTransactionsByBook(Long bookId) {
-        return transactionRepository.findByBookId(bookId)
+    public List<TransactionResponse> getTransactionsByBook(Long bookId, String authenticatedUsername) {
+        Long libraryId = authenticatedUser(authenticatedUsername).getLibrary().getId();
+
+        return transactionRepository.findByBookIdAndLibraryId(bookId, libraryId)
                 .stream()
                 .map(this::toResponse)
                 .toList();
+    }
+
+    /**
+     * Loads the account behind an authenticated login name.
+     *
+     * <p>The one place this class turns a name into a user, so every method
+     * resolves the caller - and therefore the caller's library - the same way.
+     * Named and written exactly as the matching helper in {@link BookService}
+     * and {@link CategoryService}, because a second way of answering "who is
+     * calling?" is a second thing that can drift.</p>
+     *
+     * <p>The name must come from the authenticated principal. A missing account
+     * raises the project's existing {@link UserNotFoundException} rather than
+     * returning a null that would later read as "no library".</p>
+     *
+     * @param authenticatedUsername the caller's login name
+     * @return the account it names
+     * @throws UserNotFoundException if no account has this login name
+     */
+    private User authenticatedUser(String authenticatedUsername) {
+        return userRepository.findByUsername(authenticatedUsername)
+                .orElseThrow(() -> new UserNotFoundException(authenticatedUsername));
     }
 
     /**
@@ -299,10 +394,11 @@ public class TransactionService {
      * Putting it in the controller would leave the method reachable, unguarded,
      * by anything else that later calls the service.</p>
      *
-     * <p>ADMIN and LIBRARIAN may read any history; a MEMBER may read only their
-     * own. Ownership is decided by comparing the requested id with the id of the
-     * account loaded from {@code authenticatedUsername}, so the caller supplies
-     * a name and the server supplies the id the name maps to.</p>
+     * <p>ADMIN and LIBRARIAN may read any history <b>within their own
+     * library</b>; a MEMBER may read only their own. Ownership is decided by
+     * comparing the requested id with the id of the account loaded from
+     * {@code authenticatedUsername}, so the caller supplies a name and the
+     * server supplies the id the name maps to.</p>
      *
      * @param userId                the account whose history is wanted
      * @param authenticatedUsername the caller's login name, which the caller
@@ -314,8 +410,7 @@ public class TransactionService {
      *                                           else's history
      */
     public List<TransactionResponse> getTransactionsByUser(Long userId, String authenticatedUsername) {
-        User authenticatedUser = userRepository.findByUsername(authenticatedUsername)
-                .orElseThrow(() -> new UserNotFoundException(authenticatedUsername));
+        User authenticatedUser = authenticatedUser(authenticatedUsername);
 
         // Staff see any history; a member sees only their own. The comparison is
         // between the requested id and the id on the account the server just
@@ -328,7 +423,13 @@ public class TransactionService {
             throw new TransactionAccessDeniedException();
         }
 
-        return transactionRepository.findByUserId(userId)
+        // Scoped to the caller's library as well as checked for ownership. The
+        // two rules are independent: ownership decides whose history a member
+        // may ask for, the library decides which rows exist to be asked about.
+        // A user id from another library matches nothing and yields the same
+        // empty list as an account that has never borrowed anything.
+        return transactionRepository
+                .findByUserIdAndLibraryId(userId, authenticatedUser.getLibrary().getId())
                 .stream()
                 .map(this::toResponse)
                 .toList();
@@ -345,9 +446,22 @@ public class TransactionService {
      * whether an ISSUED loan is now past its due date - overdue detection is a
      * later step, so asking for OVERDUE returns only rows already marked that
      * way.</p>
+     *
+     * <p>Scoped to the caller's library, which this endpoint needed more than
+     * any other: unscoped, one request for ISSUED returned every open loan held
+     * by every library in the system.</p>
+     *
+     * @param status                the state to match
+     * @param authenticatedUsername the caller's login name, which the caller
+     *                              must take from the authenticated principal
+     * @return that state's loans within the caller's library
+     * @throws UserNotFoundException if the authenticated name matches no account
      */
-    public List<TransactionResponse> getTransactionsByStatus(TransactionStatus status) {
-        return transactionRepository.findByStatus(status)
+    public List<TransactionResponse> getTransactionsByStatus(TransactionStatus status,
+                                                             String authenticatedUsername) {
+        Long libraryId = authenticatedUser(authenticatedUsername).getLibrary().getId();
+
+        return transactionRepository.findByStatusAndLibraryId(status, libraryId)
                 .stream()
                 .map(this::toResponse)
                 .toList();

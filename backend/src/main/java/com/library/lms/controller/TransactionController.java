@@ -95,11 +95,18 @@ public class TransactionController {
      * one that is not in the ISSUED state - already returned, most often -
      * gives <b>409 CONFLICT</b>, because the request is valid and the record
      * exists but the current state will not allow the change.</p>
+     *
+     * <p>{@link Authentication} is injected by Spring Security and its name is
+     * passed straight through, exactly as the issue endpoint does. It is the
+     * only way the service learns which library the caller belongs to; a loan
+     * in another library then answers 404 rather than being closed.</p>
      */
     @PostMapping("/{transactionId}/return")
     public ResponseEntity<TransactionResponse> returnBook(
-            @PathVariable @Positive(message = "Transaction id must be a positive number") Long transactionId) {
-        TransactionResponse returnedTransaction = transactionService.returnBook(transactionId);
+            @PathVariable @Positive(message = "Transaction id must be a positive number") Long transactionId,
+            Authentication authentication) {
+        TransactionResponse returnedTransaction =
+                transactionService.returnBook(transactionId, authentication.getName());
 
         return ResponseEntity.ok(returnedTransaction);
     }
@@ -124,14 +131,18 @@ public class TransactionController {
     /**
      * GET /api/transactions/book/{bookId} - the borrowing history of one book.
      *
-     * <p>Returns every loan ever recorded against the book, returned copies
-     * included - not just what is out now. Always 200: a book nobody has
-     * borrowed gives an empty array, which is an answer rather than an error.</p>
+     * <p>Returns every loan ever recorded against the book <b>within the
+     * caller's library</b>, returned copies included - not just what is out now.
+     * Always 200: a book nobody has borrowed gives an empty array, which is an
+     * answer rather than an error, and so does a book belonging to another
+     * library.</p>
      */
     @GetMapping("/book/{bookId}")
     public ResponseEntity<List<TransactionResponse>> getTransactionsByBook(
-            @PathVariable @Positive(message = "Book id must be a positive number") Long bookId) {
-        List<TransactionResponse> transactions = transactionService.getTransactionsByBook(bookId);
+            @PathVariable @Positive(message = "Book id must be a positive number") Long bookId,
+            Authentication authentication) {
+        List<TransactionResponse> transactions =
+                transactionService.getTransactionsByBook(bookId, authentication.getName());
 
         return ResponseEntity.ok(transactions);
     }
@@ -165,11 +176,17 @@ public class TransactionController {
      * <p>The single-segment {@code /{transactionId}} mapping above is not
      * ambiguous with this one - the paths differ in length, and Spring prefers
      * a literal segment such as "status" over a variable in any case.</p>
+     *
+     * <p>The result covers the caller's own library only. Without the
+     * authenticated name this endpoint listed every loan in every library from
+     * a single request, which was the broadest disclosure in the API.</p>
      */
     @GetMapping("/status/{status}")
     public ResponseEntity<List<TransactionResponse>> getTransactionsByStatus(
-            @PathVariable TransactionStatus status) {
-        List<TransactionResponse> transactions = transactionService.getTransactionsByStatus(status);
+            @PathVariable TransactionStatus status,
+            Authentication authentication) {
+        List<TransactionResponse> transactions =
+                transactionService.getTransactionsByStatus(status, authentication.getName());
 
         return ResponseEntity.ok(transactions);
     }

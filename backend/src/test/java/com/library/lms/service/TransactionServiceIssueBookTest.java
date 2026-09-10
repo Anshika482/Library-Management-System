@@ -23,6 +23,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.library.lms.dto.IssueBookRequest;
 import com.library.lms.entity.Book;
+import com.library.lms.entity.Library;
 import com.library.lms.entity.Role;
 import com.library.lms.entity.Transaction;
 import com.library.lms.entity.TransactionStatus;
@@ -51,6 +52,9 @@ class TransactionServiceIssueBookTest {
 
     private static final Long BOOK_ID = 7L;
 
+    /** The caller's own library. Every fixture below belongs to it. */
+    private static final Long LIBRARY_ID = 1L;
+
     @Mock
     private TransactionRepository transactionRepository;
 
@@ -63,12 +67,19 @@ class TransactionServiceIssueBookTest {
     @InjectMocks
     private TransactionService transactionService;
 
+    private static Library library(Long id) {
+        Library library = new Library();
+        library.setId(id);
+        return library;
+    }
+
     private static Book availableBook(int copies) {
         Book book = new Book();
         book.setId(BOOK_ID);
         book.setTitle("A Book");
         book.setTotalCopies(copies);
         book.setAvailableCopies(copies);
+        book.setLibrary(library(LIBRARY_ID));
         return book;
     }
 
@@ -77,6 +88,7 @@ class TransactionServiceIssueBookTest {
         user.setId(42L);
         user.setUsername(AUTHENTICATED_USERNAME);
         user.setRole(Role.ROLE_MEMBER);
+        user.setLibrary(library(LIBRARY_ID));
         return user;
     }
 
@@ -102,7 +114,7 @@ class TransactionServiceIssueBookTest {
 
     @Test
     void resolvesTheBorrowerFromTheAuthenticatedUsername() {
-        when(bookRepository.findById(BOOK_ID)).thenReturn(Optional.of(availableBook(3)));
+        when(bookRepository.findByIdAndLibraryId(BOOK_ID, LIBRARY_ID)).thenReturn(Optional.of(availableBook(3)));
         when(userRepository.findByUsername(AUTHENTICATED_USERNAME)).thenReturn(Optional.of(borrower()));
         echoSavedTransaction();
 
@@ -113,7 +125,7 @@ class TransactionServiceIssueBookTest {
 
     @Test
     void neverLooksTheBorrowerUpById() {
-        when(bookRepository.findById(BOOK_ID)).thenReturn(Optional.of(availableBook(3)));
+        when(bookRepository.findByIdAndLibraryId(BOOK_ID, LIBRARY_ID)).thenReturn(Optional.of(availableBook(3)));
         when(userRepository.findByUsername(AUTHENTICATED_USERNAME)).thenReturn(Optional.of(borrower()));
         echoSavedTransaction();
 
@@ -125,7 +137,7 @@ class TransactionServiceIssueBookTest {
     @Test
     void savesTheTransactionAgainstTheResolvedUser() {
         User resolved = borrower();
-        when(bookRepository.findById(BOOK_ID)).thenReturn(Optional.of(availableBook(3)));
+        when(bookRepository.findByIdAndLibraryId(BOOK_ID, LIBRARY_ID)).thenReturn(Optional.of(availableBook(3)));
         when(userRepository.findByUsername(AUTHENTICATED_USERNAME)).thenReturn(Optional.of(resolved));
         echoSavedTransaction();
 
@@ -149,7 +161,7 @@ class TransactionServiceIssueBookTest {
     @Test
     void decrementsAvailableCopiesAndLeavesTotalAlone() {
         Book book = availableBook(3);
-        when(bookRepository.findById(BOOK_ID)).thenReturn(Optional.of(book));
+        when(bookRepository.findByIdAndLibraryId(BOOK_ID, LIBRARY_ID)).thenReturn(Optional.of(book));
         when(userRepository.findByUsername(AUTHENTICATED_USERNAME)).thenReturn(Optional.of(borrower()));
         echoSavedTransaction();
 
@@ -162,20 +174,22 @@ class TransactionServiceIssueBookTest {
 
     @Test
     void rejectsAnAuthenticatedNameThatMatchesNoAccount() {
-        Book book = availableBook(3);
-        when(bookRepository.findById(BOOK_ID)).thenReturn(Optional.of(book));
         when(userRepository.findByUsername("ghost")).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> transactionService.issueBook(BOOK_ID, "ghost", LocalDate.now().plusDays(14)))
                 .isInstanceOf(UserNotFoundException.class);
 
-        assertThat(book.getAvailableCopies()).as("nothing written before the check").isEqualTo(3);
+        // The caller is resolved before any book is read - it has to be, since
+        // the caller's library is what scopes the book lookup. So a name that
+        // matches no account never reaches the catalogue at all.
+        verify(bookRepository, never()).findByIdAndLibraryId(anyLong(), anyLong());
         verify(transactionRepository, never()).save(any(Transaction.class));
     }
 
     @Test
     void stillRejectsAnUnknownBook() {
-        when(bookRepository.findById(BOOK_ID)).thenReturn(Optional.empty());
+        when(userRepository.findByUsername(AUTHENTICATED_USERNAME)).thenReturn(Optional.of(borrower()));
+        when(bookRepository.findByIdAndLibraryId(BOOK_ID, LIBRARY_ID)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> transactionService.issueBook(BOOK_ID, AUTHENTICATED_USERNAME,
                 LocalDate.now().plusDays(14)))
@@ -186,7 +200,7 @@ class TransactionServiceIssueBookTest {
 
     @Test
     void stillRejectsABookWithNoCopiesLeft() {
-        when(bookRepository.findById(BOOK_ID)).thenReturn(Optional.of(availableBook(0)));
+        when(bookRepository.findByIdAndLibraryId(BOOK_ID, LIBRARY_ID)).thenReturn(Optional.of(availableBook(0)));
         when(userRepository.findByUsername(AUTHENTICATED_USERNAME)).thenReturn(Optional.of(borrower()));
 
         assertThatThrownBy(() -> transactionService.issueBook(BOOK_ID, AUTHENTICATED_USERNAME,

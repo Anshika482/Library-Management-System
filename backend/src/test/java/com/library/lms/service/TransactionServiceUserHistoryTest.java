@@ -19,6 +19,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.library.lms.dto.TransactionResponse;
 import com.library.lms.entity.Book;
+import com.library.lms.entity.Library;
 import com.library.lms.entity.Role;
 import com.library.lms.entity.Transaction;
 import com.library.lms.entity.TransactionStatus;
@@ -45,6 +46,9 @@ class TransactionServiceUserHistoryTest {
 
     private static final Long OTHER_USER_ID = 99L;
 
+    /** The caller's own library. Every fixture below belongs to it. */
+    private static final Long LIBRARY_ID = 1L;
+
     @Mock
     private TransactionRepository transactionRepository;
 
@@ -57,11 +61,18 @@ class TransactionServiceUserHistoryTest {
     @InjectMocks
     private TransactionService transactionService;
 
+    private static Library library(Long id) {
+        Library library = new Library();
+        library.setId(id);
+        return library;
+    }
+
     private static User account(Long id, String username, Role role) {
         User user = new User();
         user.setId(id);
         user.setUsername(username);
         user.setRole(role);
+        user.setLibrary(library(LIBRARY_ID));
         return user;
     }
 
@@ -76,6 +87,7 @@ class TransactionServiceUserHistoryTest {
         transaction.setId(1001L);
         transaction.setBook(book);
         transaction.setUser(user);
+        transaction.setLibrary(library(LIBRARY_ID));
         transaction.setIssueDate(LocalDate.now());
         transaction.setDueDate(LocalDate.now().plusDays(14));
         transaction.setStatus(TransactionStatus.ISSUED);
@@ -89,7 +101,7 @@ class TransactionServiceUserHistoryTest {
     @Test
     void adminMayReadAnotherUsersHistory() {
         authenticatedAs("an-admin", 1L, Role.ROLE_ADMIN);
-        when(transactionRepository.findByUserId(OTHER_USER_ID)).thenReturn(List.of(loan(OTHER_USER_ID)));
+        when(transactionRepository.findByUserIdAndLibraryId(OTHER_USER_ID, LIBRARY_ID)).thenReturn(List.of(loan(OTHER_USER_ID)));
 
         List<TransactionResponse> history = transactionService.getTransactionsByUser(OTHER_USER_ID, "an-admin");
 
@@ -100,7 +112,7 @@ class TransactionServiceUserHistoryTest {
     @Test
     void librarianMayReadAnotherUsersHistory() {
         authenticatedAs("a-librarian", 2L, Role.ROLE_LIBRARIAN);
-        when(transactionRepository.findByUserId(OTHER_USER_ID)).thenReturn(List.of(loan(OTHER_USER_ID)));
+        when(transactionRepository.findByUserIdAndLibraryId(OTHER_USER_ID, LIBRARY_ID)).thenReturn(List.of(loan(OTHER_USER_ID)));
 
         List<TransactionResponse> history = transactionService.getTransactionsByUser(OTHER_USER_ID, "a-librarian");
 
@@ -111,7 +123,7 @@ class TransactionServiceUserHistoryTest {
     @Test
     void memberMayReadTheirOwnHistory() {
         authenticatedAs("a-member", OWN_USER_ID, Role.ROLE_MEMBER);
-        when(transactionRepository.findByUserId(OWN_USER_ID)).thenReturn(List.of(loan(OWN_USER_ID)));
+        when(transactionRepository.findByUserIdAndLibraryId(OWN_USER_ID, LIBRARY_ID)).thenReturn(List.of(loan(OWN_USER_ID)));
 
         List<TransactionResponse> history = transactionService.getTransactionsByUser(OWN_USER_ID, "a-member");
 
@@ -135,7 +147,7 @@ class TransactionServiceUserHistoryTest {
         assertThatThrownBy(() -> transactionService.getTransactionsByUser(OTHER_USER_ID, "a-member"))
                 .isInstanceOf(TransactionAccessDeniedException.class);
 
-        verify(transactionRepository, never()).findByUserId(anyLong());
+        verify(transactionRepository, never()).findByUserIdAndLibraryId(anyLong(), anyLong());
     }
 
     @Test
@@ -175,7 +187,7 @@ class TransactionServiceUserHistoryTest {
         // wrongly refuse a member reading their own history.
         Long largeId = 100_000L;
         authenticatedAs("a-member", largeId, Role.ROLE_MEMBER);
-        when(transactionRepository.findByUserId(Long.valueOf(100_000L)))
+        when(transactionRepository.findByUserIdAndLibraryId(Long.valueOf(100_000L), LIBRARY_ID))
                 .thenReturn(List.of(loan(largeId)));
 
         List<TransactionResponse> history =
@@ -191,6 +203,6 @@ class TransactionServiceUserHistoryTest {
         assertThatThrownBy(() -> transactionService.getTransactionsByUser(OWN_USER_ID, "ghost"))
                 .isInstanceOf(UserNotFoundException.class);
 
-        verify(transactionRepository, never()).findByUserId(anyLong());
+        verify(transactionRepository, never()).findByUserIdAndLibraryId(anyLong(), anyLong());
     }
 }
