@@ -90,7 +90,8 @@ class OptimisticLockingTest {
 
     private BookService bookService() {
         if (bookService == null) {
-            bookService = new BookService(bookRepository, categoryRepository, userRepository);
+            bookService = new BookService(bookRepository, categoryRepository, userRepository,
+                    transactionRepository);
         }
         return bookService;
     }

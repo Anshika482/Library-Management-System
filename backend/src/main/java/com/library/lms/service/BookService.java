@@ -19,6 +19,7 @@ import com.library.lms.entity.Book;
 import com.library.lms.entity.Category;
 import com.library.lms.entity.Library;
 import com.library.lms.entity.User;
+import com.library.lms.exception.BookInUseException;
 import com.library.lms.exception.BookNotFoundException;
 import com.library.lms.exception.CategoryNotFoundException;
 import com.library.lms.exception.DuplicateIsbnException;
@@ -29,6 +30,7 @@ import com.library.lms.exception.UserNotFoundException;
 import com.library.lms.repository.BookRepository;
 import com.library.lms.repository.BookSpecifications;
 import com.library.lms.repository.CategoryRepository;
+import com.library.lms.repository.TransactionRepository;
 import com.library.lms.repository.UserRepository;
 
 /**
@@ -113,11 +115,19 @@ public class BookService {
 
     private final UserRepository userRepository;
 
+    /**
+     * Needed only to answer one question before a delete: has this book ever
+     * been lent? Injected rather than reached through the transaction service,
+     * so this class keeps depending on repositories alone.
+     */
+    private final TransactionRepository transactionRepository;
+
     public BookService(BookRepository bookRepository, CategoryRepository categoryRepository,
-                       UserRepository userRepository) {
+                       UserRepository userRepository, TransactionRepository transactionRepository) {
         this.bookRepository = bookRepository;
         this.categoryRepository = categoryRepository;
         this.userRepository = userRepository;
+        this.transactionRepository = transactionRepository;
     }
 
     /**
@@ -324,7 +334,19 @@ public class BookService {
      * @throws BookNotFoundException if no book has this id
      */
     public void deleteBook(Long id, String authenticatedUsername) {
-        Book book = findBookOrThrow(id, libraryIdOf(authenticatedUsername));
+        Long libraryId = libraryIdOf(authenticatedUsername);
+
+        Book book = findBookOrThrow(id, libraryId);
+
+        // Any loan at all blocks the delete, returned ones included. Those rows
+        // are the record of who held this book and when, and they reference it
+        // by id - remove the book and the history survives pointing at a title
+        // nobody can name. Checked here rather than left to the foreign key so
+        // the caller gets a sentence naming the book instead of a database
+        // integrity error naming a constraint.
+        if (transactionRepository.existsByBookIdAndLibraryId(id, libraryId)) {
+            throw new BookInUseException(id, book.getTitle());
+        }
 
         bookRepository.delete(book);
     }

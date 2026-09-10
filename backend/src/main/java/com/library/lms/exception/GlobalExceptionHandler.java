@@ -231,6 +231,27 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handles a delete refused because the book still has loan history.
+     *
+     * <p>The same situation as {@link CategoryInUseException} and answered the
+     * same way: the request is well formed and the book exists, so <b>409</b>
+     * rather than 400 or 404 - it clashes with the state of the stored data.</p>
+     *
+     * <p>Uses the shared {@link ErrorResponse}. The message comes from the
+     * exception, which names the book by id and title and nothing else - no
+     * table, no constraint, no count of how many loans there were.</p>
+     */
+    @ExceptionHandler(BookInUseException.class)
+    public ResponseEntity<ErrorResponse> handleBookInUse(BookInUseException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.CONFLICT.value(),
+                exception.getMessage(),
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(errorResponse);
+    }
+
+    /**
      * Handles a page or size the API cannot honour.
      *
      * <p><b>400 BAD REQUEST</b>: the caller asked for something impossible - a

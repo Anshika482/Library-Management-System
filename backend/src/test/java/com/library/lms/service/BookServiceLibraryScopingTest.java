@@ -32,13 +32,16 @@ import com.library.lms.entity.Category;
 import com.library.lms.entity.Library;
 import com.library.lms.entity.Role;
 import com.library.lms.entity.User;
+import com.library.lms.exception.BookInUseException;
 import com.library.lms.exception.BookNotFoundException;
+import com.library.lms.exception.GlobalExceptionHandler;
 import com.library.lms.exception.CategoryNotFoundException;
 import com.library.lms.exception.DuplicateIsbnException;
 import com.library.lms.exception.InvalidCopyCountException;
 import com.library.lms.exception.UserNotFoundException;
 import com.library.lms.repository.BookRepository;
 import com.library.lms.repository.CategoryRepository;
+import com.library.lms.repository.TransactionRepository;
 import com.library.lms.repository.UserRepository;
 
 /**
@@ -75,6 +78,9 @@ class BookServiceLibraryScopingTest {
 
     @Mock
     private UserRepository userRepository;
+
+    @Mock
+    private TransactionRepository transactionRepository;
 
     @InjectMocks
     private BookService bookService;
@@ -331,6 +337,94 @@ class BookServiceLibraryScopingTest {
         bookService.deleteBook(BOOK_ID, CALLER);
 
         verify(bookRepository).delete(own);
+    }
+
+    @Test
+    void deleteSucceedsWhenTheBookHasNoLoanHistory() {
+        callerIsInOwnLibrary();
+        Book own = book(BOOK_ID, "Never Borrowed", OWN_LIBRARY_ID);
+        when(bookRepository.findByIdAndLibraryId(BOOK_ID, OWN_LIBRARY_ID)).thenReturn(Optional.of(own));
+        when(transactionRepository.existsByBookIdAndLibraryId(BOOK_ID, OWN_LIBRARY_ID)).thenReturn(false);
+
+        bookService.deleteBook(BOOK_ID, CALLER);
+
+        verify(bookRepository).delete(own);
+    }
+
+    @Test
+    void deleteIsRefusedWhenTheBookHasLoanHistory() {
+        callerIsInOwnLibrary();
+        Book own = book(BOOK_ID, "Once Borrowed", OWN_LIBRARY_ID);
+        when(bookRepository.findByIdAndLibraryId(BOOK_ID, OWN_LIBRARY_ID)).thenReturn(Optional.of(own));
+        when(transactionRepository.existsByBookIdAndLibraryId(BOOK_ID, OWN_LIBRARY_ID)).thenReturn(true);
+
+        assertThatThrownBy(() -> bookService.deleteBook(BOOK_ID, CALLER))
+                .isInstanceOf(BookInUseException.class)
+                .hasMessageContaining("Once Borrowed")
+                .hasMessageContaining(String.valueOf(BOOK_ID));
+
+        // The history is what is being protected, so nothing may be removed.
+        verify(bookRepository, never()).delete(any(Book.class));
+        verify(bookRepository, never()).deleteById(anyLong());
+    }
+
+    @Test
+    void aReturnedLoanStillBlocksTheDelete() {
+        // The policy is deliberately "any history", not "any open loan": a
+        // returned loan is exactly the audit record worth keeping.
+        callerIsInOwnLibrary();
+        when(bookRepository.findByIdAndLibraryId(BOOK_ID, OWN_LIBRARY_ID))
+                .thenReturn(Optional.of(book(BOOK_ID, "Returned Long Ago", OWN_LIBRARY_ID)));
+        when(transactionRepository.existsByBookIdAndLibraryId(BOOK_ID, OWN_LIBRARY_ID)).thenReturn(true);
+
+        assertThatThrownBy(() -> bookService.deleteBook(BOOK_ID, CALLER))
+                .isInstanceOf(BookInUseException.class);
+
+        verify(bookRepository, never()).delete(any(Book.class));
+    }
+
+    @Test
+    void theHistoryCheckIsScopedToTheCallersLibrary() {
+        callerIsInOwnLibrary();
+        when(bookRepository.findByIdAndLibraryId(BOOK_ID, OWN_LIBRARY_ID))
+                .thenReturn(Optional.of(book(BOOK_ID, "Owned", OWN_LIBRARY_ID)));
+        when(transactionRepository.existsByBookIdAndLibraryId(BOOK_ID, OWN_LIBRARY_ID)).thenReturn(false);
+
+        bookService.deleteBook(BOOK_ID, CALLER);
+
+        // Never the caller's id, never another library's.
+        verify(transactionRepository).existsByBookIdAndLibraryId(BOOK_ID, OWN_LIBRARY_ID);
+        verify(transactionRepository, never())
+                .existsByBookIdAndLibraryId(BOOK_ID, OTHER_LIBRARY_ID);
+    }
+
+    @Test
+    void aCrossLibraryDeleteNeverReachesTheHistoryCheck() {
+        // Tenant scoping still comes first: a book in another library is
+        // refused as missing, before any question is asked about its loans.
+        callerIsInOwnLibrary();
+        when(bookRepository.findByIdAndLibraryId(BOOK_ID, OWN_LIBRARY_ID)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> bookService.deleteBook(BOOK_ID, CALLER))
+                .isInstanceOf(BookNotFoundException.class);
+
+        verify(transactionRepository, never()).existsByBookIdAndLibraryId(anyLong(), anyLong());
+        verify(bookRepository, never()).delete(any(Book.class));
+    }
+
+    @Test
+    void aBookInUseRefusalIsReportedAs409() {
+        GlobalExceptionHandler.ErrorResponse body = new GlobalExceptionHandler()
+                .handleBookInUse(new BookInUseException(BOOK_ID, "Once Borrowed"))
+                .getBody();
+
+        assertThat(body).isNotNull();
+        assertThat(body.status()).isEqualTo(409);
+        assertThat(body.message())
+                .contains("Once Borrowed")
+                .doesNotContain("transactions.book_id")
+                .doesNotContain("constraint")
+                .doesNotContain("SQL");
     }
 
     // ---------- identity ----------

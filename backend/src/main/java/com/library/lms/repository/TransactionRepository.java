@@ -84,4 +84,33 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
      * @return that library's loans in that state
      */
     List<Transaction> findByStatusAndLibraryId(TransactionStatus status, Long libraryId);
+
+    /**
+     * Reports whether this library has ever recorded a loan against this book.
+     *
+     * <p>Used before deleting a book. Reading it as Spring Data does:
+     * {@code exists} + {@code ByBookId} + {@code AndLibraryId}, both of which
+     * are foreign keys already on the transactions row, giving
+     * {@code SELECT count(*) FROM transactions WHERE book_id = ? AND library_id = ?}
+     * with no join - and the database can stop at the first match.</p>
+     *
+     * <p>{@code boolean} rather than a List because the caller only needs to
+     * know <i>whether</i> history exists, never what it says. That also keeps
+     * this method outside the disclosure question the scoped finders answer: it
+     * returns one bit about a book the caller has already been shown to own,
+     * never a row.</p>
+     *
+     * <p>It carries the library anyway, for two reasons. It keeps every query
+     * on this interface scoped, so the rule needs no exceptions to remember;
+     * and it is equivalent to the unscoped question in any case, because a
+     * transaction always belongs to the same library as its book - the issue
+     * path sets both from the caller's own account, so the two cannot diverge.
+     * Should that ever fail to hold, the foreign key still refuses the delete,
+     * so this check can only ever be more cautious than the database.</p>
+     *
+     * @param bookId    the book about to be deleted
+     * @param libraryId the caller's library
+     * @return true if any transaction, open or returned, references this book
+     */
+    boolean existsByBookIdAndLibraryId(Long bookId, Long libraryId);
 }
