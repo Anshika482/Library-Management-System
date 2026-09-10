@@ -305,6 +305,26 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorResponse);
     }
 
+    /**
+     * Handles a due date that cannot follow from the loan's issue date.
+     *
+     * <p><b>400 BAD REQUEST</b>, like {@link InvalidCopyCountException} above:
+     * the caller asked for something that cannot be recorded, and nothing is
+     * wrong on the server.</p>
+     *
+     * <p>Uses the shared {@link ErrorResponse}. The message carries the two
+     * dates and nothing else - no account, no book, no query.</p>
+     */
+    @ExceptionHandler(InvalidDueDateException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidDueDate(InvalidDueDateException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.BAD_REQUEST.value(),
+                exception.getMessage(),
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorResponse);
+    }
+
     @ExceptionHandler(InvalidSortException.class)
     public ResponseEntity<ErrorResponse> handleInvalidSort(InvalidSortException exception) {
         ErrorResponse errorResponse = new ErrorResponse(

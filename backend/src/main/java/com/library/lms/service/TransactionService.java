@@ -17,6 +17,7 @@ import com.library.lms.entity.TransactionStatus;
 import com.library.lms.entity.User;
 import com.library.lms.exception.BookNotAvailableException;
 import com.library.lms.exception.BookNotFoundException;
+import com.library.lms.exception.InvalidDueDateException;
 import com.library.lms.exception.ReturnBookNotAllowedException;
 import com.library.lms.exception.TransactionAccessDeniedException;
 import com.library.lms.exception.TransactionNotFoundException;
@@ -105,9 +106,29 @@ public class TransactionService {
      *                                   in another library
      * @throws UserNotFoundException     if no account has this login name
      * @throws BookNotAvailableException if every copy is already on loan
+     * @throws InvalidDueDateException   if the due date is missing, or falls
+     *                                   before the date the server stamps on
+     *                                   the loan
      */
     @Transactional
     public TransactionResponse issueBook(Long bookId, String username, LocalDate dueDate) {
+        // Stamped once, here, and used for both the check below and the stored
+        // row. Calling LocalDate.now() twice would compare one instant and save
+        // another, which is the whole failure this guard exists to prevent.
+        LocalDate issueDate = LocalDate.now();
+
+        // Checked before any lookup, so a request that cannot produce a valid
+        // loan never touches the database. The DTO's @FutureOrPresent still
+        // runs at the HTTP boundary and is unchanged; this covers what that
+        // annotation cannot - a caller reaching the service directly, and the
+        // gap between validating a request and executing it.
+        if (dueDate == null) {
+            throw new InvalidDueDateException();
+        }
+        if (dueDate.isBefore(issueDate)) {
+            throw new InvalidDueDateException(dueDate, issueDate);
+        }
+
         // Resolved from the authenticated name, never from anything the caller
         // sent. The account is read again rather than trusted from the token,
         // so a deleted or renamed user cannot still borrow on an old session.
@@ -151,7 +172,7 @@ public class TransactionService {
         // transaction.library == user.library == book.library.
         transaction.setLibrary(library);
 
-        transaction.setIssueDate(LocalDate.now());
+        transaction.setIssueDate(issueDate);
         transaction.setDueDate(dueDate);
 
         // Set explicitly rather than left to default, because these two nulls

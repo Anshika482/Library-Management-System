@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -22,6 +23,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.library.lms.dto.IssueBookRequest;
+import com.library.lms.dto.TransactionResponse;
 import com.library.lms.entity.Book;
 import com.library.lms.entity.Library;
 import com.library.lms.entity.Role;
@@ -30,6 +32,8 @@ import com.library.lms.entity.TransactionStatus;
 import com.library.lms.entity.User;
 import com.library.lms.exception.BookNotAvailableException;
 import com.library.lms.exception.BookNotFoundException;
+import com.library.lms.exception.GlobalExceptionHandler;
+import com.library.lms.exception.InvalidDueDateException;
 import com.library.lms.exception.UserNotFoundException;
 import com.library.lms.repository.BookRepository;
 import com.library.lms.repository.TransactionRepository;
@@ -208,5 +212,120 @@ class TransactionServiceIssueBookTest {
                 .isInstanceOf(BookNotAvailableException.class);
 
         verify(transactionRepository, never()).save(any(Transaction.class));
+    }
+
+    // ---------- due-date validation at the service layer ----------
+
+    @Test
+    void aDueDateBeforeTheIssueDateIsRejected() {
+        assertThatThrownBy(() -> transactionService.issueBook(BOOK_ID, AUTHENTICATED_USERNAME,
+                LocalDate.now().minusDays(1)))
+                .isInstanceOf(InvalidDueDateException.class);
+    }
+
+    @Test
+    void aDueDateFarInThePastIsRejected() {
+        assertThatThrownBy(() -> transactionService.issueBook(BOOK_ID, AUTHENTICATED_USERNAME,
+                LocalDate.of(2020, 1, 1)))
+                .isInstanceOf(InvalidDueDateException.class);
+    }
+
+    @Test
+    void aMissingDueDateIsRejectedRatherThanThrowingNullPointer() {
+        // The DTO's @NotNull covers the HTTP boundary; a direct caller would
+        // otherwise reach LocalDate.isBefore on null and turn a bad request
+        // into a 500.
+        assertThatThrownBy(() -> transactionService.issueBook(BOOK_ID, AUTHENTICATED_USERNAME, null))
+                .isInstanceOf(InvalidDueDateException.class)
+                .isNotInstanceOf(NullPointerException.class);
+    }
+
+    @Test
+    void aRejectedDueDateTouchesNothing() {
+        // Validated before any lookup, so a request that cannot produce a valid
+        // loan never reads an account or a book, let alone writes one.
+        assertThatThrownBy(() -> transactionService.issueBook(BOOK_ID, AUTHENTICATED_USERNAME,
+                LocalDate.now().minusDays(1)))
+                .isInstanceOf(InvalidDueDateException.class);
+
+        verify(userRepository, never()).findByUsername(anyString());
+        verify(bookRepository, never()).findByIdAndLibraryId(anyLong(), anyLong());
+        verify(transactionRepository, never()).save(any(Transaction.class));
+    }
+
+    @Test
+    void todayIsAcceptedAsADueDate() {
+        // The boundary: same-day return is a real loan, so isBefore rather than
+        // a "must be later" rule.
+        when(userRepository.findByUsername(AUTHENTICATED_USERNAME)).thenReturn(Optional.of(borrower()));
+        when(bookRepository.findByIdAndLibraryId(BOOK_ID, LIBRARY_ID))
+                .thenReturn(Optional.of(availableBook(3)));
+        echoSavedTransaction();
+
+        LocalDate today = LocalDate.now();
+        TransactionResponse response = transactionService.issueBook(BOOK_ID, AUTHENTICATED_USERNAME, today);
+
+        assertThat(response.getDueDate()).isEqualTo(today);
+        assertThat(response.getIssueDate()).isEqualTo(today);
+    }
+
+    @Test
+    void anOrdinaryFutureDueDateIsStillAccepted() {
+        when(userRepository.findByUsername(AUTHENTICATED_USERNAME)).thenReturn(Optional.of(borrower()));
+        when(bookRepository.findByIdAndLibraryId(BOOK_ID, LIBRARY_ID))
+                .thenReturn(Optional.of(availableBook(3)));
+        echoSavedTransaction();
+
+        LocalDate dueDate = LocalDate.now().plusDays(14);
+        TransactionResponse response = transactionService.issueBook(BOOK_ID, AUTHENTICATED_USERNAME, dueDate);
+
+        assertThat(response.getDueDate()).isEqualTo(dueDate);
+        assertThat(response.getStatus()).isEqualTo(TransactionStatus.ISSUED);
+    }
+
+    @Test
+    void theIssueDateIsStampedOnceAndIsNotBeforeTheDueDate() {
+        // The invariant the guard establishes, asserted on the row that is
+        // actually saved.
+        when(userRepository.findByUsername(AUTHENTICATED_USERNAME)).thenReturn(Optional.of(borrower()));
+        when(bookRepository.findByIdAndLibraryId(BOOK_ID, LIBRARY_ID))
+                .thenReturn(Optional.of(availableBook(3)));
+        echoSavedTransaction();
+
+        transactionService.issueBook(BOOK_ID, AUTHENTICATED_USERNAME, LocalDate.now().plusDays(7));
+
+        ArgumentCaptor<Transaction> captor = ArgumentCaptor.forClass(Transaction.class);
+        verify(transactionRepository).save(captor.capture());
+        Transaction saved = captor.getValue();
+
+        assertThat(saved.getIssueDate()).isEqualTo(LocalDate.now());
+        assertThat(saved.getDueDate()).isAfterOrEqualTo(saved.getIssueDate());
+    }
+
+    @Test
+    void theDtoStillCarriesItsOwnDueDateValidation() {
+        // Belt and braces: the service guard is additional to @FutureOrPresent,
+        // not a replacement for it.
+        java.lang.annotation.Annotation[] annotations;
+        try {
+            annotations = IssueBookRequest.class.getDeclaredField("dueDate").getAnnotations();
+        } catch (NoSuchFieldException e) {
+            throw new AssertionError("dueDate field must exist on IssueBookRequest", e);
+        }
+
+        assertThat(Arrays.stream(annotations).map(a -> a.annotationType().getSimpleName()))
+                .contains("NotNull", "FutureOrPresent");
+    }
+
+    @Test
+    void anInvalidDueDateIsReportedAs400() {
+        GlobalExceptionHandler.ErrorResponse body = new GlobalExceptionHandler()
+                .handleInvalidDueDate(
+                        new InvalidDueDateException(LocalDate.of(2020, 1, 1), LocalDate.of(2026, 1, 1)))
+                .getBody();
+
+        assertThat(body).isNotNull();
+        assertThat(body.status()).isEqualTo(400);
+        assertThat(body.message()).contains("2020-01-01").contains("2026-01-01");
     }
 }
