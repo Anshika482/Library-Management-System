@@ -119,27 +119,6 @@ public interface BookRepository extends JpaRepository<Book, Long>, JpaSpecificat
     Optional<Book> findByIsbnAndLibraryId(String isbn, Long libraryId);
 
     /**
-     * Finds every book shelved under the category with this name.
-     *
-     * <p>Still a derived query, but now it reaches <b>through</b> the
-     * relationship: {@code findBy} + {@code Category} (the field on Book) +
-     * {@code Name} (the field on Category). Spring Data reads that as "join
-     * categories and match on its name", producing
-     * {@code SELECT ... FROM books b JOIN categories c ON b.category_id = c.id
-     * WHERE c.name = ?} - written for us, so no @Query and no SQL.</p>
-     *
-     * <p>This replaces the former {@code findByCategory(String)}, which matched
-     * the old free-text column. Callers are unaffected: the parameter is still
-     * a category name, so {@code /api/books/category/Programming} behaves
-     * exactly as it did.</p>
-     *
-     * <p>The return type is a {@code List} because a category normally holds many
-     * books; when none match, Spring Data returns an <b>empty list</b>, never
-     * null, so the caller can loop over the result without checking first.</p>
-     */
-    List<Book> findByCategoryName(String name);
-
-    /**
      * Reports whether any book currently points at this category.
      *
      * <p>Used before deleting a category. Reading it as Spring Data does:
