@@ -108,12 +108,27 @@ public class Book {
      * before and must remain so - books that predate this change have no
      * category_id yet, and a NOT NULL constraint would make them invalid rows.</p>
      *
-     * <p>Fetching is left at the {@code @ManyToOne} default, which is EAGER.
-     * That is the right choice here: {@code spring.jpa.open-in-view=false} closes
-     * the database session when the service returns, so a lazy category would
-     * already be unreachable by the time we read its name to build the response.</p>
+     * <p>Fetching is <b>LAZY</b>, and that is only safe because of how it is
+     * read. {@code BookService.toResponse} needs the category's <i>name</i>, not
+     * just its id - and a name cannot be served from an uninitialised proxy the
+     * way an id can. With {@code spring.jpa.open-in-view=false} the book is
+     * already detached by then, so a bare lazy association would throw.</p>
+     *
+     * <p>What makes it work is that every query feeding {@code toResponse}
+     * carries {@code @EntityGraph(attributePaths = "category")}, which loads the
+     * category in the same statement rather than one extra select per row. That
+     * is the point of the change: EAGER fetched the category correctly but a row
+     * at a time, so a fifty-book page cost up to fifty extra queries.</p>
+     *
+     * <p>The pairing is load-bearing in both directions. A query that returns a
+     * Book to {@code toResponse} <b>must</b> declare the graph; the one query
+     * that deliberately does not - {@code findByIsbnAndLibraryId}, whose result
+     * is only ever compared by id - must not, since fetching there would be
+     * waste. {@code BookServiceDetachedCategoryMappingTest} exercises all four
+     * graphed paths against a real session and fails if either half is dropped.</p>
      */
-    @ManyToOne
+    @ToString.Exclude
+    @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "category_id")
     private Category category;
 

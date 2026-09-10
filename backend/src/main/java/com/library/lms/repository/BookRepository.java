@@ -3,6 +3,10 @@ package com.library.lms.repository;
 import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.stereotype.Repository;
@@ -34,6 +38,40 @@ import com.library.lms.entity.Book;
 public interface BookRepository extends JpaRepository<Book, Long>, JpaSpecificationExecutor<Book> {
 
     /**
+     * One page of books matching a filter, with each book's category loaded.
+     *
+     * <p>Redeclared from {@link JpaSpecificationExecutor} for one reason: an
+     * annotation cannot be attached to an inherited method, and without the
+     * graph every row on the page would cost a second query to read its
+     * category name.</p>
+     *
+     * <p>The graph is used rather than a {@code fetch} join inside the
+     * {@link Specification} deliberately. A fetch join in a Specification is
+     * applied to Spring Data's <b>count</b> query as well, where join fetching
+     * is illegal, and the request fails outright. An entity graph is applied to
+     * the data query only, so {@code totalElements} and {@code totalPages} keep
+     * working.</p>
+     *
+     * <p>Paging stays correct because {@code category} is a {@code @ManyToOne}:
+     * a single-valued association cannot multiply rows, so {@code LIMIT} still
+     * means what it says and Hibernate has no reason to page in memory.</p>
+     */
+    @Override
+    @EntityGraph(attributePaths = "category")
+    Page<Book> findAll(Specification<Book> specification, Pageable pageable);
+
+    /**
+     * Every book matching a filter, with each book's category loaded.
+     *
+     * <p>The unpaged sibling of the method above, redeclared for the same
+     * reason and carrying the same graph. No count query is involved here, so
+     * this is the simpler of the two.</p>
+     */
+    @Override
+    @EntityGraph(attributePaths = "category")
+    List<Book> findAll(Specification<Book> specification);
+
+    /**
      * One book, but only if it belongs to this library.
      *
      * <p>Scoping the lookup rather than loading the row and checking afterwards
@@ -46,6 +84,7 @@ public interface BookRepository extends JpaRepository<Book, Long>, JpaSpecificat
      * @param libraryId the caller's library
      * @return the book, or empty if it is missing or belongs elsewhere
      */
+    @EntityGraph(attributePaths = "category")
     Optional<Book> findByIdAndLibraryId(Long id, Long libraryId);
 
     /**
@@ -60,6 +99,7 @@ public interface BookRepository extends JpaRepository<Book, Long>, JpaSpecificat
      * @param name      the category name to match
      * @return that library's books in that category
      */
+    @EntityGraph(attributePaths = "category")
     List<Book> findByLibraryIdAndCategoryName(Long libraryId, String name);
 
     /**
