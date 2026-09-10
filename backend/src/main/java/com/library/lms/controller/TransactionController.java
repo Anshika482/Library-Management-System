@@ -135,16 +135,26 @@ public class TransactionController {
      *
      * <p>Returns every loan ever recorded against the book <b>within the
      * caller's library</b>, returned copies included - not just what is out now.
-     * Always 200: a book nobody has borrowed gives an empty array, which is an
+     * Always 200: a book nobody has borrowed gives an empty page, which is an
      * answer rather than an error, and so does a book belonging to another
      * library.</p>
+     *
+     * <p><b>Paged</b>, on the same four parameters and defaults as
+     * {@code /status/{status}} and {@code GET /api/books}. A title that has been
+     * on the shelves for years accumulates history without limit, and library
+     * scoping bounds whose loans are returned but not how many. All four
+     * parameters are optional, so the URL is unchanged.</p>
      */
     @GetMapping("/book/{bookId}")
-    public ResponseEntity<List<TransactionResponse>> getTransactionsByBook(
+    public ResponseEntity<PagedResponse<TransactionResponse>> getTransactionsByBook(
             @PathVariable @Positive(message = "Book id must be a positive number") Long bookId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(defaultValue = "id") String sortBy,
+            @RequestParam(defaultValue = "asc") String direction,
             Authentication authentication) {
-        List<TransactionResponse> transactions =
-                transactionService.getTransactionsByBook(bookId, authentication.getName());
+        PagedResponse<TransactionResponse> transactions = transactionService.getTransactionsByBook(
+                bookId, page, size, sortBy, direction, authentication.getName());
 
         return ResponseEntity.ok(transactions);
     }

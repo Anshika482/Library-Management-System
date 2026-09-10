@@ -50,14 +50,25 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
      * <p>Reads as {@code findBy} + {@code BookId} + {@code AndLibraryId}, both
      * of which are foreign keys already on the transactions row, so no join is
      * needed. A book id belonging to another library matches nothing and gives
-     * the same empty list as a book nobody has ever borrowed; the two answers
+     * the same empty page as a book nobody has ever borrowed; the two answers
      * are meant to be indistinguishable.</p>
+     *
+     * <p>Returns a {@link Page} for the same reason the status query does:
+     * scoping to one library bounds <i>whose</i> loans come back, not <i>how
+     * many</i>, and a long-lived popular title accumulates history without
+     * limit. The {@code LIMIT} is applied by the database, so rows beyond the
+     * page are never materialised.</p>
+     *
+     * <p>The library stays in the query rather than the {@link Pageable} - it
+     * is a predicate the caller cannot influence, while page, size and sort are
+     * all things the caller supplies.</p>
      *
      * @param bookId    the book whose history is wanted
      * @param libraryId the caller's library
-     * @return that library's loans against that book, oldest first
+     * @param pageable  which slice to return, and in what order
+     * @return one page of that library's loans against that book
      */
-    List<Transaction> findByBookIdAndLibraryId(Long bookId, Long libraryId);
+    Page<Transaction> findByBookIdAndLibraryId(Long bookId, Long libraryId, Pageable pageable);
 
     /**
      * One library's loans belonging to one user, resolved the same way via

@@ -377,32 +377,56 @@ public class TransactionService {
     /**
      * Every loan recorded against one book, current and historical.
      *
-     * <p>An unknown book id yields an empty list rather than a 404. That
+     * <p>An unknown book id yields an empty page rather than a 404. That
      * matches {@code getBooksByCategory} in {@link BookService}: asking "what
      * has happened to this book?" and getting nothing back is a valid answer,
      * and checking the book exists first would cost an extra query to change a
      * 200 into a 404 without telling the caller anything more useful.</p>
      *
-     * <p>A book belonging to another library gets that same empty list, which
+     * <p>A book belonging to another library gets that same empty page, which
      * is why no book lookup happens here at all. Loading the book to decide
      * whether it exists would create the very distinction this endpoint must
-     * not offer: an empty list for a book nobody borrowed and a 404 for a book
-     * in the next library would let a caller map another tenant's catalogue one
-     * id at a time.</p>
+     * not offer: an empty result for a book nobody borrowed and a 404 for a
+     * book in the next library would let a caller map another tenant's
+     * catalogue one id at a time. Paging changed the shape of that empty answer
+     * and nothing about what it reveals.</p>
+     *
+     * <p>Paged on the same terms as {@link #getTransactionsByStatus}, down to
+     * the shared {@link #validatePagination} and {@link #resolveSort}: a
+     * popular title's lifetime history grows without limit, and library scoping
+     * bounds whose loans come back but not how many.</p>
      *
      * @param bookId                the book whose history is wanted
+     * @param page                  which page, zero-based
+     * @param size                  how many loans per page, at most
+     *                              {@value #MAX_PAGE_SIZE}
+     * @param sortBy                one of {@link #SORTABLE_FIELDS}
+     * @param direction             asc or desc
      * @param authenticatedUsername the caller's login name, which the caller
      *                              must take from the authenticated principal
-     * @return that book's loans within the caller's library
-     * @throws UserNotFoundException if the authenticated name matches no account
+     * @return one page of that book's loans within the caller's library
+     * @throws UserNotFoundException      if the authenticated name matches no
+     *                                    account
+     * @throws InvalidPaginationException if page or size is out of range
+     * @throws InvalidSortException       if the sort field or direction is not
+     *                                    supported
      */
-    public List<TransactionResponse> getTransactionsByBook(Long bookId, String authenticatedUsername) {
+    public PagedResponse<TransactionResponse> getTransactionsByBook(Long bookId,
+                                                                    int page, int size,
+                                                                    String sortBy, String direction,
+                                                                    String authenticatedUsername) {
+        // Unchanged: the library comes from the caller's own account, and is
+        // resolved before anything is read.
         Long libraryId = authenticatedUser(authenticatedUsername).getLibrary().getId();
 
-        return transactionRepository.findByBookIdAndLibraryId(bookId, libraryId)
-                .stream()
-                .map(this::toResponse)
-                .toList();
+        validatePagination(page, size);
+
+        Pageable pageable = PageRequest.of(page, size, resolveSort(sortBy, direction));
+
+        Page<Transaction> transactions =
+                transactionRepository.findByBookIdAndLibraryId(bookId, libraryId, pageable);
+
+        return toPagedResponse(transactions);
     }
 
     /**
@@ -550,6 +574,18 @@ public class TransactionService {
         Page<Transaction> transactions =
                 transactionRepository.findByStatusAndLibraryId(status, libraryId, pageable);
 
+        return toPagedResponse(transactions);
+    }
+
+    /**
+     * Turns a page of stored loans into the page the API sends back.
+     *
+     * <p>Shared by the two paged reads so the wrapper cannot drift between
+     * them: the totals always describe the whole matching set, never the slice,
+     * and the entities always stop at this layer - a Transaction holds a User,
+     * and a User holds a password hash.</p>
+     */
+    private PagedResponse<TransactionResponse> toPagedResponse(Page<Transaction> transactions) {
         List<TransactionResponse> content = transactions.getContent()
                 .stream()
                 .map(this::toResponse)

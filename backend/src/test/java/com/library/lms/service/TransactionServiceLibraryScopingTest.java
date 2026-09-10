@@ -360,13 +360,16 @@ class TransactionServiceLibraryScopingTest {
     @Test
     void staffInLibraryASeeNoHistoryForALibraryBBook() {
         callerIs(staffOfA());
-        when(transactionRepository.findByBookIdAndLibraryId(BOOK_B_ID, LIBRARY_A_ID))
-                .thenReturn(List.of());
+        when(transactionRepository.findByBookIdAndLibraryId(
+                eq(BOOK_B_ID), eq(LIBRARY_A_ID), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of()));
 
-        List<TransactionResponse> history = transactionService.getTransactionsByBook(BOOK_B_ID, CALLER_A);
+        PagedResponse<TransactionResponse> history = transactionService.getTransactionsByBook(
+                BOOK_B_ID, 0, 10, "id", "asc", CALLER_A);
 
-        assertThat(history).isEmpty();
-        verify(transactionRepository).findByBookIdAndLibraryId(BOOK_B_ID, LIBRARY_A_ID);
+        assertThat(history.getContent()).isEmpty();
+        verify(transactionRepository).findByBookIdAndLibraryId(
+                eq(BOOK_B_ID), eq(LIBRARY_A_ID), any(Pageable.class));
         // A "never called findByBookId" check cannot be written here: the
         // unscoped method no longer exists to name. See
         // theRepositoryDeclaresNoUnscopedQueries below.
@@ -376,13 +379,16 @@ class TransactionServiceLibraryScopingTest {
     void bookHistoryStillWorksWithinTheCallersLibrary() {
         callerIs(staffOfA());
         Book bookA = book(BOOK_A_ID, LIBRARY_A, 3, 2);
-        when(transactionRepository.findByBookIdAndLibraryId(BOOK_A_ID, LIBRARY_A_ID))
-                .thenReturn(List.of(loan(TRANSACTION_A_ID, LIBRARY_A, bookA, memberOfA("member-of-a"))));
+        when(transactionRepository.findByBookIdAndLibraryId(
+                eq(BOOK_A_ID), eq(LIBRARY_A_ID), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(
+                        List.of(loan(TRANSACTION_A_ID, LIBRARY_A, bookA, memberOfA("member-of-a")))));
 
-        List<TransactionResponse> history = transactionService.getTransactionsByBook(BOOK_A_ID, CALLER_A);
+        PagedResponse<TransactionResponse> history = transactionService.getTransactionsByBook(
+                BOOK_A_ID, 0, 10, "id", "asc", CALLER_A);
 
-        assertThat(history).hasSize(1);
-        assertThat(history.get(0).getBookId()).isEqualTo(BOOK_A_ID);
+        assertThat(history.getContent()).hasSize(1);
+        assertThat(history.getContent().get(0).getBookId()).isEqualTo(BOOK_A_ID);
     }
 
     // ---------- 7. get by user: cross-library ----------
