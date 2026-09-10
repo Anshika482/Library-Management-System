@@ -167,6 +167,7 @@ public class CategoryService {
      * @throws CategoryNotFoundException  if no category has this id
      * @throws DuplicateCategoryException if another category already uses the name
      */
+    @Transactional
     public CategoryResponse updateCategory(Long id, CategoryRequest request, String authenticatedUsername) {
         Long libraryId = authenticatedUser(authenticatedUsername).getLibrary().getId();
 
@@ -208,6 +209,7 @@ public class CategoryService {
      * @throws CategoryNotFoundException if no category has this id
      * @throws CategoryInUseException    if at least one book references it
      */
+    @Transactional
     public void deleteCategory(Long id, String authenticatedUsername) {
         Long libraryId = authenticatedUser(authenticatedUsername).getLibrary().getId();
 

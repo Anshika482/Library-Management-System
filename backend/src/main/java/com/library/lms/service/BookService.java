@@ -333,6 +333,7 @@ public class BookService {
      *
      * @throws BookNotFoundException if no book has this id
      */
+    @Transactional
     public void deleteBook(Long id, String authenticatedUsername) {
         Long libraryId = libraryIdOf(authenticatedUsername);
 
