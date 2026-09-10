@@ -3,6 +3,8 @@ package com.library.lms.repository;
 import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
@@ -79,11 +81,23 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
      * String also keeps a typo a compile error instead of a query that quietly
      * returns nothing.</p>
      *
+     * <p>Returns a {@link Page} rather than a List, because scoping the query
+     * to one library bounds <i>whose</i> loans come back but not <i>how
+     * many</i>: a busy library's open loans grow without limit, and this is the
+     * widest result the API can produce. The {@code LIMIT} is applied by the
+     * database, so the rows are never materialised and then discarded.</p>
+     *
+     * <p>The library stays in the query, not in the {@link Pageable} - a
+     * predicate a caller cannot influence, while page, size and sort are all
+     * things a caller supplies.</p>
+     *
      * @param status    the state to match
      * @param libraryId the caller's library
-     * @return that library's loans in that state
+     * @param pageable  which slice to return, and in what order
+     * @return one page of that library's loans in that state
      */
-    List<Transaction> findByStatusAndLibraryId(TransactionStatus status, Long libraryId);
+    Page<Transaction> findByStatusAndLibraryId(TransactionStatus status, Long libraryId,
+                                               Pageable pageable);
 
     /**
      * Reports whether this library has ever recorded a loan against this book.

@@ -2,12 +2,19 @@ package com.library.lms.service;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.TreeSet;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.library.lms.dto.PagedResponse;
 import com.library.lms.dto.TransactionResponse;
 import com.library.lms.entity.Book;
 import com.library.lms.entity.Library;
@@ -18,6 +25,8 @@ import com.library.lms.entity.User;
 import com.library.lms.exception.BookNotAvailableException;
 import com.library.lms.exception.BookNotFoundException;
 import com.library.lms.exception.InvalidDueDateException;
+import com.library.lms.exception.InvalidPaginationException;
+import com.library.lms.exception.InvalidSortException;
 import com.library.lms.exception.ReturnBookNotAllowedException;
 import com.library.lms.exception.TransactionAccessDeniedException;
 import com.library.lms.exception.TransactionNotFoundException;
@@ -46,6 +55,38 @@ import com.library.lms.repository.UserRepository;
  */
 @Service
 public class TransactionService {
+
+    /**
+     * The largest page a client may ask for.
+     *
+     * <p>The same ceiling {@code BookService} applies, and for the same reason:
+     * without one, {@code ?size=1000000} would pull a whole library's lending
+     * history into memory in a single request - exactly what pagination exists
+     * to prevent. Kept identical to the book value deliberately, so the API has
+     * one answer to "how large may a page be?" rather than two.</p>
+     */
+    private static final int MAX_PAGE_SIZE = 50;
+
+    /**
+     * The only fields a client may sort a loan list by, mapped to the property
+     * name used in the query.
+     *
+     * <p>This map is the security boundary for sorting. The value handed to
+     * {@code Sort.by} is taken from the <b>right-hand side</b> - a constant
+     * written here - never from the request, so nothing a client types can
+     * reach the query as a property path. An unrecognised name produces no
+     * entry and the request is rejected.</p>
+     *
+     * <p>Deliberately excluded: {@code book}, {@code user} and {@code library}.
+     * All three are associations rather than plain columns, so sorting by them
+     * needs a join, and {@code fineAmount}, which nothing populates yet.</p>
+     */
+    private static final Map<String, String> SORTABLE_FIELDS = Map.of(
+            "id", "id",
+            "issueDate", "issueDate",
+            "dueDate", "dueDate",
+            "returnDate", "returnDate",
+            "status", "status");
 
     private final TransactionRepository transactionRepository;
 
@@ -472,20 +513,116 @@ public class TransactionService {
      * any other: unscoped, one request for ISSUED returned every open loan held
      * by every library in the system.</p>
      *
+     * <p>Paged, unlike the other two list methods. Scoping the query to one
+     * library bounds whose loans come back but not how many, and this endpoint
+     * is the widest of the three - "every open loan" grows with the library.
+     * The page, size, sort field and direction all follow the convention
+     * {@code BookService} already established, so the two paginated endpoints
+     * behave identically from outside.</p>
+     *
      * @param status                the state to match
+     * @param page                  which page, zero-based
+     * @param size                  how many loans per page, at most
+     *                              {@value #MAX_PAGE_SIZE}
+     * @param sortBy                one of {@link #SORTABLE_FIELDS}
+     * @param direction             asc or desc
      * @param authenticatedUsername the caller's login name, which the caller
      *                              must take from the authenticated principal
-     * @return that state's loans within the caller's library
-     * @throws UserNotFoundException if the authenticated name matches no account
+     * @return one page of that state's loans within the caller's library
+     * @throws UserNotFoundException       if the authenticated name matches no
+     *                                     account
+     * @throws InvalidPaginationException  if page or size is out of range
+     * @throws InvalidSortException        if the sort field or direction is not
+     *                                     supported
      */
-    public List<TransactionResponse> getTransactionsByStatus(TransactionStatus status,
-                                                             String authenticatedUsername) {
+    public PagedResponse<TransactionResponse> getTransactionsByStatus(TransactionStatus status,
+                                                                      int page, int size,
+                                                                      String sortBy, String direction,
+                                                                      String authenticatedUsername) {
+        // Unchanged from before pagination: the library comes from the caller's
+        // own account, and is resolved before anything is read.
         Long libraryId = authenticatedUser(authenticatedUsername).getLibrary().getId();
 
-        return transactionRepository.findByStatusAndLibraryId(status, libraryId)
+        validatePagination(page, size);
+
+        Pageable pageable = PageRequest.of(page, size, resolveSort(sortBy, direction));
+
+        Page<Transaction> transactions =
+                transactionRepository.findByStatusAndLibraryId(status, libraryId, pageable);
+
+        List<TransactionResponse> content = transactions.getContent()
                 .stream()
                 .map(this::toResponse)
                 .toList();
+
+        return new PagedResponse<>(
+                content,
+                transactions.getNumber(),
+                transactions.getSize(),
+                transactions.getTotalElements(),
+                transactions.getTotalPages());
+    }
+
+    /**
+     * Refuses a page or size the API will not serve.
+     *
+     * <p>Written to match {@code BookService.validatePagination} exactly,
+     * including the messages, so a caller who has met one paginated endpoint
+     * already knows what this one will say.</p>
+     *
+     * @throws InvalidPaginationException for a negative page, a size below one,
+     *                                    or a size above {@value #MAX_PAGE_SIZE}
+     */
+    private void validatePagination(int page, int size) {
+        if (page < 0) {
+            throw new InvalidPaginationException("Page must be 0 or greater, but was " + page);
+        }
+        if (size < 1) {
+            throw new InvalidPaginationException("Size must be at least 1, but was " + size);
+        }
+        if (size > MAX_PAGE_SIZE) {
+            throw new InvalidPaginationException(
+                    "Size must not exceed " + MAX_PAGE_SIZE + ", but was " + size);
+        }
+    }
+
+    /**
+     * Turns a requested sort field and direction into a {@link Sort}, or
+     * refuses it.
+     *
+     * <p>The field is looked up in {@link #SORTABLE_FIELDS} rather than passed
+     * through, so an unknown name is a clean 400 instead of a
+     * PropertyReferenceException surfacing as a 500 that names the entity's
+     * internals.</p>
+     *
+     * <p>A secondary sort by id is appended unless id is already the sort
+     * field. Without it, rows sharing a value - every loan issued on the same
+     * day, say - have no defined order between them, and the same row could
+     * appear on two consecutive pages or on neither.</p>
+     *
+     * @throws InvalidSortException for an unknown field or direction
+     */
+    private Sort resolveSort(String sortBy, String direction) {
+        String property = SORTABLE_FIELDS.get(sortBy);
+        if (property == null) {
+            throw new InvalidSortException("Unsupported sort field: " + sortBy
+                    + ". Allowed fields are: "
+                    + String.join(", ", new TreeSet<>(SORTABLE_FIELDS.keySet())));
+        }
+
+        Sort.Direction sortDirection;
+        if ("asc".equalsIgnoreCase(direction)) {
+            sortDirection = Sort.Direction.ASC;
+        } else if ("desc".equalsIgnoreCase(direction)) {
+            sortDirection = Sort.Direction.DESC;
+        } else {
+            throw new InvalidSortException("Unsupported sort direction: " + direction
+                    + ". Allowed directions are: asc, desc");
+        }
+
+        Sort sort = Sort.by(sortDirection, property);
+
+        return "id".equals(property) ? sort : sort.and(Sort.by(Sort.Direction.ASC, "id"));
     }
 
     /**

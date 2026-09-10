@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -21,8 +22,11 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
 
 import com.library.lms.dto.IssueBookRequest;
+import com.library.lms.dto.PagedResponse;
 import com.library.lms.dto.TransactionResponse;
 import com.library.lms.entity.Book;
 import com.library.lms.entity.Library;
@@ -417,17 +421,22 @@ class TransactionServiceLibraryScopingTest {
         Book bookA = book(BOOK_A_ID, LIBRARY_A, 3, 2);
 
         // The repository is asked only for A, so B's loan is never a candidate.
-        when(transactionRepository.findByStatusAndLibraryId(TransactionStatus.ISSUED, LIBRARY_A_ID))
-                .thenReturn(List.of(loan(TRANSACTION_A_ID, LIBRARY_A, bookA, memberOfA("member-of-a"))));
+        // Paging changed the shape of the answer, not who may appear in it.
+        when(transactionRepository.findByStatusAndLibraryId(
+                eq(TransactionStatus.ISSUED), eq(LIBRARY_A_ID), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(
+                        List.of(loan(TRANSACTION_A_ID, LIBRARY_A, bookA, memberOfA("member-of-a")))));
 
-        List<TransactionResponse> issued =
-                transactionService.getTransactionsByStatus(TransactionStatus.ISSUED, CALLER_A);
+        PagedResponse<TransactionResponse> issued = transactionService.getTransactionsByStatus(
+                TransactionStatus.ISSUED, 0, 10, "id", "asc", CALLER_A);
 
-        assertThat(issued).hasSize(1);
-        assertThat(issued.get(0).getId()).isEqualTo(TRANSACTION_A_ID);
-        assertThat(issued).extracting(TransactionResponse::getId).doesNotContain(TRANSACTION_B_ID);
+        assertThat(issued.getContent()).hasSize(1);
+        assertThat(issued.getContent().get(0).getId()).isEqualTo(TRANSACTION_A_ID);
+        assertThat(issued.getContent())
+                .extracting(TransactionResponse::getId).doesNotContain(TRANSACTION_B_ID);
 
-        verify(transactionRepository).findByStatusAndLibraryId(TransactionStatus.ISSUED, LIBRARY_A_ID);
+        verify(transactionRepository).findByStatusAndLibraryId(
+                eq(TransactionStatus.ISSUED), eq(LIBRARY_A_ID), any(Pageable.class));
     }
 
     // ---------- 10. no global transaction queries survive ----------

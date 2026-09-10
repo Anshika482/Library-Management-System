@@ -9,10 +9,12 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.library.lms.dto.IssueBookRequest;
+import com.library.lms.dto.PagedResponse;
 import com.library.lms.dto.TransactionResponse;
 import com.library.lms.entity.TransactionStatus;
 import com.library.lms.service.TransactionService;
@@ -180,13 +182,25 @@ public class TransactionController {
      * <p>The result covers the caller's own library only. Without the
      * authenticated name this endpoint listed every loan in every library from
      * a single request, which was the broadest disclosure in the API.</p>
+     *
+     * <p><b>Paged.</b> The body is a {@link PagedResponse} rather than a bare
+     * array, because library scoping bounds whose loans are returned but not
+     * how many, and "every open loan" is the largest answer this API gives. The
+     * four parameters and their defaults are the ones
+     * {@code GET /api/books} already uses, so the two paginated endpoints are
+     * driven the same way; all four are optional, so the URL itself is
+     * unchanged.</p>
      */
     @GetMapping("/status/{status}")
-    public ResponseEntity<List<TransactionResponse>> getTransactionsByStatus(
+    public ResponseEntity<PagedResponse<TransactionResponse>> getTransactionsByStatus(
             @PathVariable TransactionStatus status,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(defaultValue = "id") String sortBy,
+            @RequestParam(defaultValue = "asc") String direction,
             Authentication authentication) {
-        List<TransactionResponse> transactions =
-                transactionService.getTransactionsByStatus(status, authentication.getName());
+        PagedResponse<TransactionResponse> transactions = transactionService.getTransactionsByStatus(
+                status, page, size, sortBy, direction, authentication.getName());
 
         return ResponseEntity.ok(transactions);
     }
