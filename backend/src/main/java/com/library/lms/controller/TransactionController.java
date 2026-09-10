@@ -162,16 +162,26 @@ public class TransactionController {
     /**
      * GET /api/transactions/user/{userId} - the borrowing history of one user.
      *
-     * <p>Same shape and same reasoning as the book history above. Note it
-     * exposes only loan records; nothing about the user themselves is
-     * returned, not even their name.</p>
+     * <p>Same shape and same reasoning as the book history above, paged on the
+     * same four parameters and defaults. Note it exposes only loan records;
+     * nothing about the user themselves is returned, not even their name.</p>
+     *
+     * <p>Unlike the book and status histories, this one is not staff-only at
+     * the filter chain - a member may read their own. The rule that decides
+     * <i>whose</i> history they may read lives in the service, and is applied
+     * before pagination, so an unauthorized request answers 403 rather than
+     * commenting on the page size it was sent with.</p>
      */
     @GetMapping("/user/{userId}")
-    public ResponseEntity<List<TransactionResponse>> getTransactionsByUser(
+    public ResponseEntity<PagedResponse<TransactionResponse>> getTransactionsByUser(
             @PathVariable @Positive(message = "User id must be a positive number") Long userId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(defaultValue = "id") String sortBy,
+            @RequestParam(defaultValue = "asc") String direction,
             Authentication authentication) {
-        List<TransactionResponse> transactions =
-                transactionService.getTransactionsByUser(userId, authentication.getName());
+        PagedResponse<TransactionResponse> transactions = transactionService.getTransactionsByUser(
+                userId, page, size, sortBy, direction, authentication.getName());
 
         return ResponseEntity.ok(transactions);
     }

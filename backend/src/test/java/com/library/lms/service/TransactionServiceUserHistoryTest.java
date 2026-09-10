@@ -2,7 +2,9 @@ package com.library.lms.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -16,7 +18,10 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
 
+import com.library.lms.dto.PagedResponse;
 import com.library.lms.dto.TransactionResponse;
 import com.library.lms.entity.Book;
 import com.library.lms.entity.Library;
@@ -101,41 +106,50 @@ class TransactionServiceUserHistoryTest {
     @Test
     void adminMayReadAnotherUsersHistory() {
         authenticatedAs("an-admin", 1L, Role.ROLE_ADMIN);
-        when(transactionRepository.findByUserIdAndLibraryId(OTHER_USER_ID, LIBRARY_ID)).thenReturn(List.of(loan(OTHER_USER_ID)));
+        when(transactionRepository.findByUserIdAndLibraryId(
+                eq(OTHER_USER_ID), eq(LIBRARY_ID), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(loan(OTHER_USER_ID))));
 
-        List<TransactionResponse> history = transactionService.getTransactionsByUser(OTHER_USER_ID, "an-admin");
+        PagedResponse<TransactionResponse> history = transactionService.getTransactionsByUser(
+                OTHER_USER_ID, 0, 10, "id", "asc", "an-admin");
 
-        assertThat(history).hasSize(1);
-        assertThat(history.get(0).getUserId()).isEqualTo(OTHER_USER_ID);
+        assertThat(history.getContent()).hasSize(1);
+        assertThat(history.getContent().get(0).getUserId()).isEqualTo(OTHER_USER_ID);
     }
 
     @Test
     void librarianMayReadAnotherUsersHistory() {
         authenticatedAs("a-librarian", 2L, Role.ROLE_LIBRARIAN);
-        when(transactionRepository.findByUserIdAndLibraryId(OTHER_USER_ID, LIBRARY_ID)).thenReturn(List.of(loan(OTHER_USER_ID)));
+        when(transactionRepository.findByUserIdAndLibraryId(
+                eq(OTHER_USER_ID), eq(LIBRARY_ID), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(loan(OTHER_USER_ID))));
 
-        List<TransactionResponse> history = transactionService.getTransactionsByUser(OTHER_USER_ID, "a-librarian");
+        PagedResponse<TransactionResponse> history = transactionService.getTransactionsByUser(
+                OTHER_USER_ID, 0, 10, "id", "asc", "a-librarian");
 
-        assertThat(history).hasSize(1);
-        assertThat(history.get(0).getUserId()).isEqualTo(OTHER_USER_ID);
+        assertThat(history.getContent()).hasSize(1);
+        assertThat(history.getContent().get(0).getUserId()).isEqualTo(OTHER_USER_ID);
     }
 
     @Test
     void memberMayReadTheirOwnHistory() {
         authenticatedAs("a-member", OWN_USER_ID, Role.ROLE_MEMBER);
-        when(transactionRepository.findByUserIdAndLibraryId(OWN_USER_ID, LIBRARY_ID)).thenReturn(List.of(loan(OWN_USER_ID)));
+        when(transactionRepository.findByUserIdAndLibraryId(
+                eq(OWN_USER_ID), eq(LIBRARY_ID), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(loan(OWN_USER_ID))));
 
-        List<TransactionResponse> history = transactionService.getTransactionsByUser(OWN_USER_ID, "a-member");
+        PagedResponse<TransactionResponse> history = transactionService.getTransactionsByUser(
+                OWN_USER_ID, 0, 10, "id", "asc", "a-member");
 
-        assertThat(history).hasSize(1);
-        assertThat(history.get(0).getUserId()).isEqualTo(OWN_USER_ID);
+        assertThat(history.getContent()).hasSize(1);
+        assertThat(history.getContent().get(0).getUserId()).isEqualTo(OWN_USER_ID);
     }
 
     @Test
     void memberMayNotReadAnotherUsersHistory() {
         authenticatedAs("a-member", OWN_USER_ID, Role.ROLE_MEMBER);
 
-        assertThatThrownBy(() -> transactionService.getTransactionsByUser(OTHER_USER_ID, "a-member"))
+        assertThatThrownBy(() -> transactionService.getTransactionsByUser(OTHER_USER_ID, 0, 10, "id", "asc", "a-member"))
                 .isInstanceOf(TransactionAccessDeniedException.class)
                 .hasMessage("Access denied");
     }
@@ -144,10 +158,11 @@ class TransactionServiceUserHistoryTest {
     void refusedRequestNeverReadsTheRowsItWasRefused() {
         authenticatedAs("a-member", OWN_USER_ID, Role.ROLE_MEMBER);
 
-        assertThatThrownBy(() -> transactionService.getTransactionsByUser(OTHER_USER_ID, "a-member"))
+        assertThatThrownBy(() -> transactionService.getTransactionsByUser(OTHER_USER_ID, 0, 10, "id", "asc", "a-member"))
                 .isInstanceOf(TransactionAccessDeniedException.class);
 
-        verify(transactionRepository, never()).findByUserIdAndLibraryId(anyLong(), anyLong());
+        verify(transactionRepository, never())
+                .findByUserIdAndLibraryId(anyLong(), anyLong(), any(Pageable.class));
     }
 
     @Test
@@ -155,7 +170,7 @@ class TransactionServiceUserHistoryTest {
         authenticatedAs("a-member", OWN_USER_ID, Role.ROLE_MEMBER);
 
         Throwable refusal = org.assertj.core.api.Assertions.catchThrowable(
-                () -> transactionService.getTransactionsByUser(OTHER_USER_ID, "a-member"));
+                () -> transactionService.getTransactionsByUser(OTHER_USER_ID, 0, 10, "id", "asc", "a-member"));
 
         assertThat(refusal).isInstanceOf(TransactionAccessDeniedException.class);
         assertThat(refusal.getMessage())
@@ -176,8 +191,8 @@ class TransactionServiceUserHistoryTest {
         // through; comparing against the loaded account's own id refuses it.
         authenticatedAs(String.valueOf(OTHER_USER_ID), OWN_USER_ID, Role.ROLE_MEMBER);
 
-        assertThatThrownBy(() -> transactionService.getTransactionsByUser(OTHER_USER_ID,
-                String.valueOf(OTHER_USER_ID)))
+        assertThatThrownBy(() -> transactionService.getTransactionsByUser(
+                OTHER_USER_ID, 0, 10, "id", "asc", String.valueOf(OTHER_USER_ID)))
                 .isInstanceOf(TransactionAccessDeniedException.class);
     }
 
@@ -187,22 +202,24 @@ class TransactionServiceUserHistoryTest {
         // wrongly refuse a member reading their own history.
         Long largeId = 100_000L;
         authenticatedAs("a-member", largeId, Role.ROLE_MEMBER);
-        when(transactionRepository.findByUserIdAndLibraryId(Long.valueOf(100_000L), LIBRARY_ID))
-                .thenReturn(List.of(loan(largeId)));
+        when(transactionRepository.findByUserIdAndLibraryId(
+                eq(Long.valueOf(100_000L)), eq(LIBRARY_ID), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(loan(largeId))));
 
-        List<TransactionResponse> history =
-                transactionService.getTransactionsByUser(Long.valueOf(100_000L), "a-member");
+        PagedResponse<TransactionResponse> history =
+                transactionService.getTransactionsByUser(Long.valueOf(100_000L), 0, 10, "id", "asc", "a-member");
 
-        assertThat(history).hasSize(1);
+        assertThat(history.getContent()).hasSize(1);
     }
 
     @Test
     void unresolvableAuthenticatedNameIsRejectedRatherThanAllowed() {
         when(userRepository.findByUsername("ghost")).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> transactionService.getTransactionsByUser(OWN_USER_ID, "ghost"))
+        assertThatThrownBy(() -> transactionService.getTransactionsByUser(OWN_USER_ID, 0, 10, "id", "asc", "ghost"))
                 .isInstanceOf(UserNotFoundException.class);
 
-        verify(transactionRepository, never()).findByUserIdAndLibraryId(anyLong(), anyLong());
+        verify(transactionRepository, never())
+                .findByUserIdAndLibraryId(anyLong(), anyLong(), any(Pageable.class));
     }
 }

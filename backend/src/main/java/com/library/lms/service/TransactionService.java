@@ -486,21 +486,44 @@ public class TransactionService {
      * {@code authenticatedUsername}, so the caller supplies a name and the
      * server supplies the id the name maps to.</p>
      *
+     * <p>Paged on the same terms as the other two list reads, reusing the same
+     * {@link #validatePagination} and {@link #resolveSort}. Note the order of
+     * the two refusals: <b>ownership is decided first</b>, so a member asking
+     * for somebody else's history is told 403 whatever page or size they sent.
+     * Validating pagination first would answer 400 instead, which quietly turns
+     * an authorization failure into a request-format complaint and hands the
+     * caller a way to distinguish "not allowed" from "badly asked".</p>
+     *
      * @param userId                the account whose history is wanted
+     * @param page                  which page, zero-based
+     * @param size                  how many loans per page, at most
+     *                              {@value #MAX_PAGE_SIZE}
+     * @param sortBy                one of {@link #SORTABLE_FIELDS}
+     * @param direction             asc or desc
      * @param authenticatedUsername the caller's login name, which the caller
      *                              must take from the authenticated principal
-     * @return that user's loans, oldest first as the repository returns them
+     * @return one page of that user's loans within the caller's library
      * @throws UserNotFoundException             if the authenticated name matches
      *                                           no account
      * @throws TransactionAccessDeniedException  if a member asks for someone
      *                                           else's history
+     * @throws InvalidPaginationException        if page or size is out of range
+     * @throws InvalidSortException              if the sort field or direction
+     *                                           is not supported
      */
-    public List<TransactionResponse> getTransactionsByUser(Long userId, String authenticatedUsername) {
+    public PagedResponse<TransactionResponse> getTransactionsByUser(Long userId,
+                                                                    int page, int size,
+                                                                    String sortBy, String direction,
+                                                                    String authenticatedUsername) {
         User authenticatedUser = authenticatedUser(authenticatedUsername);
 
         // Staff see any history; a member sees only their own. The comparison is
         // between the requested id and the id on the account the server just
         // loaded - never the name in the URL, and never the name against an id.
+        //
+        // This stays the first decision after resolving the caller. Pagination
+        // is validated below it, not above: an unauthorized member must get the
+        // same 403 whether their page and size were sensible or nonsense.
         if (!maySeeAnyUsersActivity(authenticatedUser)
                 && !Objects.equals(authenticatedUser.getId(), userId)) {
             // Thrown before the rows are fetched, so a refused request never
@@ -509,16 +532,21 @@ public class TransactionService {
             throw new TransactionAccessDeniedException();
         }
 
+        Long libraryId = authenticatedUser.getLibrary().getId();
+
+        validatePagination(page, size);
+
+        Pageable pageable = PageRequest.of(page, size, resolveSort(sortBy, direction));
+
         // Scoped to the caller's library as well as checked for ownership. The
         // two rules are independent: ownership decides whose history a member
         // may ask for, the library decides which rows exist to be asked about.
         // A user id from another library matches nothing and yields the same
-        // empty list as an account that has never borrowed anything.
-        return transactionRepository
-                .findByUserIdAndLibraryId(userId, authenticatedUser.getLibrary().getId())
-                .stream()
-                .map(this::toResponse)
-                .toList();
+        // empty page as an account that has never borrowed anything.
+        Page<Transaction> transactions =
+                transactionRepository.findByUserIdAndLibraryId(userId, libraryId, pageable);
+
+        return toPagedResponse(transactions);
     }
 
     /**

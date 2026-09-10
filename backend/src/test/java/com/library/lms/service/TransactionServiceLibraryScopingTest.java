@@ -396,13 +396,17 @@ class TransactionServiceLibraryScopingTest {
     @Test
     void staffInLibraryASeeNoHistoryForALibraryBUser() {
         callerIs(staffOfA());
-        when(transactionRepository.findByUserIdAndLibraryId(USER_B_ID, LIBRARY_A_ID))
-                .thenReturn(List.of());
+        when(transactionRepository.findByUserIdAndLibraryId(
+                eq(USER_B_ID), eq(LIBRARY_A_ID), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of()));
 
-        List<TransactionResponse> history = transactionService.getTransactionsByUser(USER_B_ID, CALLER_A);
+        PagedResponse<TransactionResponse> history = transactionService.getTransactionsByUser(
+                USER_B_ID, 0, 10, "id", "asc", CALLER_A);
 
-        assertThat(history).as("a neighbouring library's borrower reveals nothing").isEmpty();
-        verify(transactionRepository).findByUserIdAndLibraryId(USER_B_ID, LIBRARY_A_ID);
+        assertThat(history.getContent())
+                .as("a neighbouring library's borrower reveals nothing").isEmpty();
+        verify(transactionRepository).findByUserIdAndLibraryId(
+                eq(USER_B_ID), eq(LIBRARY_A_ID), any(Pageable.class));
     }
 
     @Test
@@ -412,11 +416,13 @@ class TransactionServiceLibraryScopingTest {
         String member = "member-of-a";
         callerIs(memberOfA(member));
 
-        assertThatThrownBy(() -> transactionService.getTransactionsByUser(USER_B_ID, member))
+        assertThatThrownBy(() -> transactionService.getTransactionsByUser(
+                USER_B_ID, 0, 10, "id", "asc", member))
                 .isInstanceOf(TransactionAccessDeniedException.class)
                 .hasMessage("Access denied");
 
-        verify(transactionRepository, never()).findByUserIdAndLibraryId(anyLong(), anyLong());
+        verify(transactionRepository, never())
+                .findByUserIdAndLibraryId(anyLong(), anyLong(), any(Pageable.class));
     }
 
     // ---------- 8. get by status ----------

@@ -77,11 +77,22 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
      * <p>A user id from another library matches nothing, so a staff member
      * cannot read a neighbouring library's borrowing history by walking ids.</p>
      *
+     * <p>Paged like its two siblings. A personal history is the most naturally
+     * bounded of the three - one reader's activity rather than a whole
+     * library's - but it still grows for as long as the account exists, and an
+     * endpoint whose result size depends on how long somebody has been a member
+     * is not bounded in any useful sense.</p>
+     *
+     * <p>The library stays in the query rather than the {@link Pageable}: it is
+     * a predicate the caller cannot influence, while page, size and sort are
+     * all things the caller supplies.</p>
+     *
      * @param userId    the account whose history is wanted
      * @param libraryId the caller's library
-     * @return that library's loans for that account
+     * @param pageable  which slice to return, and in what order
+     * @return one page of that library's loans for that account
      */
-    List<Transaction> findByUserIdAndLibraryId(Long userId, Long libraryId);
+    Page<Transaction> findByUserIdAndLibraryId(Long userId, Long libraryId, Pageable pageable);
 
     /**
      * One library's loans in one state.
