@@ -11,6 +11,8 @@ import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -476,6 +478,51 @@ public class GlobalExceptionHandler {
                 LocalDateTime.now());
 
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorResponse);
+    }
+
+    /**
+     * Handles a request body Jackson could not read at all.
+     *
+     * <p><b>400 BAD REQUEST</b>, not 500. Left unhandled this fell through to
+     * the catch-all and reported a malformed body as a server fault - which is
+     * both wrong and unhelpful, since the one thing the caller needs to know is
+     * that the fault is theirs and retrying unchanged will not help. Truncated
+     * JSON, a stray brace or an empty body all arrive here.</p>
+     *
+     * <p>The message is a fixed sentence and deliberately does <b>not</b> use
+     * {@code exception.getMessage()}. Jackson's text names the target class, the
+     * field it was parsing and the byte offset it gave up at - a description of
+     * the server's internals handed to whoever sent the bad request.</p>
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ErrorResponse> handleUnreadableBody(HttpMessageNotReadableException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.BAD_REQUEST.value(),
+                "Request body could not be read. Check that it is valid JSON.",
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorResponse);
+    }
+
+    /**
+     * Handles a request whose Content-Type this API cannot consume.
+     *
+     * <p><b>415 UNSUPPORTED MEDIA TYPE</b> - the status that exists for exactly
+     * this, and the one a client can act on: the body may be perfectly valid, it
+     * was simply announced as the wrong format. Previously a 500.</p>
+     *
+     * <p>The message names the type this API accepts rather than echoing what
+     * was sent or listing internal converter details.</p>
+     */
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ErrorResponse> handleUnsupportedMediaType(
+            HttpMediaTypeNotSupportedException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.UNSUPPORTED_MEDIA_TYPE.value(),
+                "Unsupported content type. This API accepts application/json.",
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE).body(errorResponse);
     }
 
     /**
