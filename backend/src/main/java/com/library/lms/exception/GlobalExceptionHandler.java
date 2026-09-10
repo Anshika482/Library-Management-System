@@ -7,6 +7,7 @@ import java.util.stream.Collectors;
 import org.springframework.context.MessageSourceResolvable;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
@@ -465,6 +466,39 @@ public class GlobalExceptionHandler {
                 HttpStatus.CONFLICT.value(),
                 "Database operation could not be completed because it conflicts with existing data"
                         + " or database constraints.",
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(errorResponse);
+    }
+
+    /**
+     * Handles two requests that changed the same row at the same time.
+     *
+     * <p>{@code Book} and {@code Transaction} carry a {@code @Version} column,
+     * so every update is written as
+     * {@code UPDATE ... WHERE id = ? AND version = ?}. When two requests read a
+     * row, both decide what to write and both try to save it, the first commits
+     * and bumps the version; the second matches no row, and Hibernate raises
+     * this exception rather than letting the write disappear.</p>
+     *
+     * <p>Without a handler here that surfaced as a <b>500</b> through the
+     * catch-all, which reads as a server fault. It is not one: nothing is
+     * broken, the caller simply lost a race. <b>409 CONFLICT</b> says exactly
+     * that, and matches how every other "your request clashes with the stored
+     * state" failure in this class is reported.</p>
+     *
+     * <p>The message is a fixed sentence and invites a retry, because retrying
+     * is genuinely the right response - the second attempt reads the row as it
+     * now stands. It carries no id, no table name and no version number:
+     * echoing them back would describe the row the caller did not manage to
+     * write, and the detail belongs in the server log.</p>
+     */
+    @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
+    public ResponseEntity<ErrorResponse> handleOptimisticLockingFailure(
+            ObjectOptimisticLockingFailureException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.CONFLICT.value(),
+                "The resource was modified by another request. Please try again.",
                 LocalDateTime.now());
 
         return ResponseEntity.status(HttpStatus.CONFLICT).body(errorResponse);

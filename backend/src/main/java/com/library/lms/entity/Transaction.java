@@ -13,6 +13,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -58,6 +59,20 @@ public class Transaction {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    /**
+     * Row version, maintained by Hibernate for optimistic locking.
+     *
+     * <p>The same protection {@link Book} carries, for the same reason. Two
+     * concurrent returns of one loan would each read {@code ISSUED}, each pass
+     * the status check and each put a copy back on the shelf; with a version
+     * column the second write matches no row and fails rather than adding a
+     * copy the library does not own.</p>
+     *
+     * <p>Never assigned by hand - Hibernate owns this field.</p>
+     */
+    @Version
+    private Long version;
 
     /**
      * The book that was borrowed.

@@ -10,6 +10,7 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
+import jakarta.persistence.Version;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -56,6 +57,24 @@ public class Book {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    /**
+     * Row version, maintained by Hibernate for optimistic locking.
+     *
+     * <p>Every update now carries {@code AND version = ?} in its WHERE clause.
+     * Two requests that read the same copy counts and both try to write will
+     * therefore collide: the first commits and bumps the version, the second
+     * matches no row and fails instead of silently overwriting. That silent
+     * overwrite is precisely how one copy could be issued twice - both callers
+     * read {@code availableCopies = 1}, and the second write simply replaced the
+     * first rather than conflicting with it.</p>
+     *
+     * <p>Never assigned by hand. Hibernate sets it on insert and increments it
+     * on every update; the setter exists only because Lombok generates one for
+     * every field, and a test needs it to build a deliberately stale copy.</p>
+     */
+    @Version
+    private Long version;
 
     /** Title of the book. Required, so the column is NOT NULL. */
     @Column(nullable = false, length = 200)

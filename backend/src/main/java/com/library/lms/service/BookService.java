@@ -288,9 +288,18 @@ public class BookService {
      * <i>different</i> book is a conflict, which is why the id being updated is
      * passed to the check below.</p>
      *
+     * <p>{@code @Transactional} matters more here than it looks. This method
+     * reads both copy counts, works out how many are on loan from the
+     * difference, and writes both back. Without a transaction around the read
+     * and the write, an issue or return committing in between would leave that
+     * difference stale and the recomputed availability quietly wrong - the very
+     * rule this method exists to enforce. Inside one transaction, the version
+     * check on {@link Book} turns that race into a refusal instead.</p>
+     *
      * @throws BookNotFoundException  if no book has this id
      * @throws DuplicateIsbnException if the new ISBN belongs to another book
      */
+    @Transactional
     public BookResponse updateBook(Long id, BookRequest request, String authenticatedUsername) {
         Long libraryId = libraryIdOf(authenticatedUsername);
 
