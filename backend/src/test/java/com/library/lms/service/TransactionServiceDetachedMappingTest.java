@@ -1,10 +1,12 @@
 package com.library.lms.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 
 import java.time.LocalDate;
 import java.util.UUID;
 
+import org.hibernate.Hibernate;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -43,6 +45,13 @@ import com.library.lms.repository.UserRepository;
  * resolving the caller - the last of which is already a LAZY association today.
  * If a detached association getter were unsafe, these tests would fail with a
  * LazyInitializationException rather than an assertion error.</p>
+ *
+ * <p>The last test covers a different hazard on the same fault line: Lombok's
+ * generated {@code toString()} reads every field it has not been told to skip,
+ * and a Hibernate proxy answers {@code toString()} by initialising itself. On a
+ * detached entity that throws. Every LAZY association in this project is
+ * therefore {@code @ToString.Exclude}, and that test is what holds the two
+ * newest ones to it.</p>
  *
  * <p><b>Deliberately absent:</b> no {@code @Transactional} on the class or the
  * methods, because one would keep a persistence context open for the whole test
@@ -202,5 +211,49 @@ class TransactionServiceDetachedMappingTest {
         assertThat(page.getContent()).hasSize(1);
         assertThat(page.getContent().get(0).getId()).isEqualTo(saved.getId());
         assertThat(page.getTotalElements()).isEqualTo(1);
+    }
+
+    @Test
+    void toStringOnADetachedLoanDoesNotTouchItsAssociations() {
+        String suffix = unique();
+        Long loanId = persistOneReturnedLoan(suffix).getId();
+
+        // Loaded through the real repository with no surrounding transaction, so
+        // the row comes back detached and its LAZY associations are genuine,
+        // uninitialised proxies - which the fixtures above are not, having been
+        // assembled from real objects in this test.
+        Transaction detached = transactionRepository.findById(loanId)
+                .orElseThrow(() -> new AssertionError("the saved loan was not found"));
+
+        // Hibernate.isInitialized only reports; it never initialises. Reading
+        // the field returns the proxy without touching it either.
+        assertThat(Hibernate.isInitialized(detached.getBook()))
+                .as("precondition: book must still be an untouched proxy")
+                .isFalse();
+        assertThat(Hibernate.isInitialized(detached.getUser()))
+                .as("precondition: user must still be an untouched proxy")
+                .isFalse();
+
+        assertThatCode(detached::toString)
+                .as("a detached loan must be printable - this is what "
+                        + "@ToString.Exclude on book and user buys")
+                .doesNotThrowAnyException();
+
+        // The stronger claim: toString did not merely survive, it never asked
+        // for the associations at all. Had it read them, these would now be true
+        // and the session is long closed, so it could not have succeeded.
+        assertThat(Hibernate.isInitialized(detached.getBook()))
+                .as("toString must not have initialised book")
+                .isFalse();
+        assertThat(Hibernate.isInitialized(detached.getUser()))
+                .as("toString must not have initialised user")
+                .isFalse();
+
+        // It is still a useful toString: the scalars are all there.
+        assertThat(detached.toString())
+                .contains("id=" + loanId)
+                .contains("RETURNED")
+                .doesNotContain("Book(")
+                .doesNotContain("User(");
     }
 }

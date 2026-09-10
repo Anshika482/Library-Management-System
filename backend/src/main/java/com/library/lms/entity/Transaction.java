@@ -81,6 +81,7 @@ public class Transaction {
      * foreign key to {@code books(id)} - a transaction without a book would be
      * meaningless, and the database already refuses one.</p>
      */
+    @ToString.Exclude
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "book_id", nullable = false)
     private Book book;
@@ -93,6 +94,7 @@ public class Transaction {
      * a user, so a transaction modelled with only a member's name could never be
      * inserted. Mapping the real relationship resolves that.</p>
      */
+    @ToString.Exclude
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "user_id", nullable = false)
     private User user;
