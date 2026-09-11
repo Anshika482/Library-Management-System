@@ -7,18 +7,22 @@ import java.util.stream.Collectors;
 import org.springframework.context.MessageSourceResolvable;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpMediaTypeNotAcceptableException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
  * Turns exceptions thrown anywhere in the application into tidy JSON responses.
@@ -523,6 +527,92 @@ public class GlobalExceptionHandler {
                 LocalDateTime.now());
 
         return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE).body(errorResponse);
+    }
+
+    /**
+     * Handles a request that names a real path with the wrong verb.
+     *
+     * <p><b>405 METHOD NOT ALLOWED</b>, not 500. Spring raises this before any
+     * controller code runs - the path matched a mapping, the method did not -
+     * so nothing in the application has even been asked to do anything yet.
+     * Left unhandled it fell through to the catch-all and reported a server
+     * fault for what is a client using the wrong verb, typically a DELETE where
+     * the API wanted a POST.</p>
+     *
+     * <p>The message is a fixed sentence. The exception's own text names the
+     * rejected method and lists the ones the mapping does support, which is a
+     * description of the API's shape handed to whoever probed it.</p>
+     */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ErrorResponse> handleMethodNotAllowed(
+            HttpRequestMethodNotSupportedException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.METHOD_NOT_ALLOWED.value(),
+                "Method not allowed.",
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED).body(errorResponse);
+    }
+
+    /**
+     * Handles a caller who will not accept anything this API can produce.
+     *
+     * <p><b>406 NOT ACCEPTABLE.</b> The counterpart of the 415 above: there the
+     * body arrived in a format we cannot read, here the caller's
+     * {@code Accept} header rules out every format we can write. Nothing is
+     * broken in either case.</p>
+     *
+     * <p><b>Why this one pins its own content type.</b> Every other handler in
+     * this class lets content negotiation choose how to serialise the
+     * {@link ErrorResponse}. That cannot work here, because negotiation is
+     * precisely what has already failed - asking it to serialise the
+     * explanation would fail for the same reason and the caller would receive a
+     * bare 406 with an empty body, which is what this API did before this
+     * handler existed. Declaring {@code application/json} explicitly makes the
+     * converter write it regardless. Answering with a representation the client
+     * did not ask for is expressly allowed for an error response, and a
+     * readable explanation is worth more to a caller than a silent refusal.</p>
+     *
+     * <p>The message names no media type, neither the one requested nor the
+     * ones available.</p>
+     */
+    @ExceptionHandler(HttpMediaTypeNotAcceptableException.class)
+    public ResponseEntity<ErrorResponse> handleNotAcceptable(
+            HttpMediaTypeNotAcceptableException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.NOT_ACCEPTABLE.value(),
+                "Requested representation is not available.",
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.NOT_ACCEPTABLE)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(errorResponse);
+    }
+
+    /**
+     * Handles a request for a path this application does not serve.
+     *
+     * <p><b>404 NOT FOUND.</b> When no mapping matches, the request falls
+     * through to the static resource handler, which finds no file either and
+     * raises this. Left unhandled it reached the catch-all, so every typo in a
+     * URL - and every scan for {@code /.env} or {@code /admin} - came back as
+     * <b>500</b>. That is worse than merely wrong: a server reporting itself
+     * broken for any unknown path tells a prober that something is there to
+     * break.</p>
+     *
+     * <p>The message matches the one already used for a missing resource
+     * elsewhere in this class rather than echoing the requested path, which
+     * would reflect attacker-controlled text straight back into the
+     * response.</p>
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ErrorResponse> handleNoResourceFound(NoResourceFoundException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.NOT_FOUND.value(),
+                "Resource not found.",
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(errorResponse);
     }
 
     /**
