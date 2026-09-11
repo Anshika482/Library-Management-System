@@ -24,9 +24,16 @@ import com.library.lms.repository.UserRepository;
  * a UserDetailsService of our own exists. From this class onward that default
  * account is gone and the database is the only source of accounts.</p>
  *
- * <p>Nothing calls this yet. There is no login endpoint and the filter chain
- * still permits every request; this step only supplies the lookup that
- * authentication will need.</p>
+ * <p>Spring Security calls {@link #loadUserByUsername(String)} whenever it
+ * needs to establish who a caller is. At login, the authentication manager
+ * uses it to fetch the account so the submitted password can be checked
+ * against the stored one. On each authenticated request, the JWT filter uses
+ * it to reload the account named in the token, so the caller's authority comes
+ * from the database rather than from the token.</p>
+ *
+ * <p>The account is found through {@link UserRepository#findByUsername(String)}.
+ * The {@link UserDetails} returned carries the stored (hashed) password and a
+ * single authority named after the user's role.</p>
  */
 @Service
 public class CustomUserDetailsService implements UserDetailsService {
