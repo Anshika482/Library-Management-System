@@ -17,6 +17,7 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.access.AccessDeniedHandler;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -108,6 +109,12 @@ public class SecurityConfig {
      *       answers an empty 403. That is the wrong signal: 403 means "you
      *       are known and still may not", while these callers simply sent no
      *       credentials. See {@link #restAuthenticationEntryPoint}.</li>
+     *   <li><b>403 for authenticated callers without the role</b> - a
+     *       caller who presented a valid token but lacks the authority an
+     *       endpoint demands. Left to Spring Security's default handler this
+     *       was a 403 with no body and no content type, so the filter chain
+     *       answered in a different shape from every controller. See
+     *       {@link RestAccessDeniedHandler}.</li>
      *   <li><b>JWT filter inserted</b> - {@link JwtAuthenticationFilter} runs
      *       ahead of {@link UsernamePasswordAuthenticationFilter}, the slot
      *       Spring Security reserves for whatever establishes identity. It
@@ -127,7 +134,8 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
             JwtAuthenticationFilter jwtAuthenticationFilter,
-            AuthenticationEntryPoint restAuthenticationEntryPoint) throws Exception {
+            AuthenticationEntryPoint restAuthenticationEntryPoint,
+            AccessDeniedHandler restAccessDeniedHandler) throws Exception {
         http
                 .csrf(AbstractHttpConfigurer::disable)
                 .formLogin(AbstractHttpConfigurer::disable)
@@ -165,7 +173,8 @@ public class SecurityConfig {
 
                         .anyRequest().authenticated())
                 .exceptionHandling(exceptions -> exceptions
-                        .authenticationEntryPoint(restAuthenticationEntryPoint))
+                        .authenticationEntryPoint(restAuthenticationEntryPoint)
+                        .accessDeniedHandler(restAccessDeniedHandler))
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
