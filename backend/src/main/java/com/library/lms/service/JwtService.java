@@ -1,9 +1,12 @@
 package com.library.lms.service;
 
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Date;
+import java.util.HexFormat;
 import java.util.List;
 
 import javax.crypto.SecretKey;
@@ -45,21 +48,76 @@ public class JwtService {
     /** HS256 requires a key of at least 256 bits, which is 32 bytes. */
     private static final int MINIMUM_SECRET_LENGTH_BYTES = 32;
 
+    /**
+     * SHA-256 of the development placeholder this property used to carry.
+     *
+     * <p>That value sat in {@code application.properties} as the fallback for
+     * {@code JWT_SECRET}, which meant the application would sign and accept
+     * tokens using a key published in this repository. Removing the fallback
+     * stops it being used by default; refusing it here stops it being used at
+     * all, including by anyone who copies it out of the Git history into their
+     * environment.</p>
+     *
+     * <p>Stored as a hash rather than the string itself for one practical
+     * reason: a 69-character constant in a source file reads as a key, trips
+     * every secret scanner, and invites someone to reuse it. A hash cannot be
+     * mistaken for a usable secret and cannot be reversed into one, while still
+     * recognising the value if it turns up. The preimage is public in this
+     * repository's history and is exercised by
+     * {@code JwtServiceSecretValidationTest}.</p>
+     */
+    private static final String RETIRED_PLACEHOLDER_SHA256 =
+            "161807e398c0585c9d76c4d01bc2d4121851c7c537750ab94ae41f426cefdbaf";
+
     private final SecretKey signingKey;
 
     /**
      * Builds the signing key once, at startup.
      *
-     * <p>The length check is the point of doing this in a constructor. A secret
-     * shorter than HS256 requires would otherwise be discovered on the first
-     * login attempt, in production, as a failed request; here it stops the
-     * application from starting at all and says exactly what is wrong. The
-     * message deliberately describes the secret without quoting it.</p>
+     * <p>Doing this in a constructor is the point. A secret that is unusable
+     * would otherwise be discovered on the first login attempt, in production,
+     * as a failed request; here it stops the application from starting at all
+     * and says exactly what is wrong. Every message below describes the secret
+     * without quoting it, so a startup failure never prints the value it is
+     * complaining about.</p>
+     *
+     * <p>Three ways a secret is refused, in the order they are checked:</p>
+     * <ul>
+     *   <li><b>Blank</b> - {@code JWT_SECRET} set to an empty or whitespace
+     *       value. Spring's {@code ${JWT_SECRET}} placeholder catches the
+     *       variable being <i>absent</i>, but an empty variable resolves
+     *       perfectly well to an empty string, so it has to be caught here.
+     *       Checked first because the length check below would otherwise
+     *       report it as merely "too short", which sends the reader looking
+     *       for the wrong problem.</li>
+     *   <li><b>The retired placeholder</b> - see
+     *       {@link #RETIRED_PLACEHOLDER_SHA256}. It is long enough to pass the
+     *       length check, so nothing else here would stop it.</li>
+     *   <li><b>Too short</b> - the original check, unchanged. HS256 needs 256
+     *       bits and refuses a shorter key rather than signing weakly.</li>
+     * </ul>
      *
      * @param secret the configured signing secret, from {@code jwt.secret}
-     * @throws IllegalStateException if the secret is too short to sign safely
+     * @throws IllegalStateException if the secret is blank, is the retired
+     *                               development placeholder, or is too short
+     *                               to sign safely
      */
     public JwtService(@Value("${jwt.secret}") String secret) {
+        if (secret == null || secret.isBlank()) {
+            throw new IllegalStateException(
+                    "jwt.secret resolved to a blank value. Set the JWT_SECRET environment"
+                            + " variable to a private secret of at least "
+                            + MINIMUM_SECRET_LENGTH_BYTES + " bytes.");
+        }
+
+        if (RETIRED_PLACEHOLDER_SHA256.equalsIgnoreCase(sha256Hex(secret))) {
+            throw new IllegalStateException(
+                    "jwt.secret is the development placeholder that used to be committed to"
+                            + " application.properties. That value is public in this repository's"
+                            + " history, so anyone holding it can mint a token for any account."
+                            + " Set the JWT_SECRET environment variable to a private value.");
+        }
+
         byte[] keyBytes = secret.getBytes(StandardCharsets.UTF_8);
 
         if (keyBytes.length < MINIMUM_SECRET_LENGTH_BYTES) {
@@ -70,6 +128,32 @@ public class JwtService {
         }
 
         this.signingKey = Keys.hmacShaKeyFor(keyBytes);
+    }
+
+    /**
+     * Hex-encoded SHA-256 of a candidate secret, used only for the denylist
+     * comparison above.
+     *
+     * <p>This is not password hashing and is not trying to be: there is no salt
+     * and no work factor, because the question is "is this exactly the one
+     * known-bad value" rather than "does this match a stored credential". A
+     * fast digest is the right tool for an equality test against a published
+     * string.</p>
+     *
+     * <p>SHA-256 is required of every Java platform, so the checked exception
+     * cannot actually occur; it is rethrown rather than swallowed because a JVM
+     * without it is broken in a way that must not be papered over. The message
+     * carries no part of the input.</p>
+     */
+    private static String sha256Hex(String value) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8));
+
+            return HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is unavailable on this JVM", exception);
+        }
     }
 
     /**

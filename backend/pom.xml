@@ -195,6 +195,36 @@
                 </configuration>
             </plugin>
             <!--
+                The test JWT signing secret.
+
+                jwt.secret is now ${JWT_SECRET} with no fallback, so the five
+                test classes that start a Spring context would fail to resolve
+                it on a machine where the variable is not set - which is every
+                machine, since the whole point of the change is that no default
+                exists. Supplying it here keeps the suite runnable without
+                putting a value back into application.properties, where it
+                would be production configuration again.
+
+                It is passed as a real environment variable rather than a system
+                property so the tests resolve it by exactly the path production
+                does. The value is a fixed, obviously-labelled test string: it
+                signs nothing outside the test JVM, and no test asserts anything
+                about the secret itself, only about tokens signed with whatever
+                is configured. DB_PASSWORD is deliberately NOT set here - the
+                integration tests use the developer's own MySQL credentials from
+                the environment, and hard-coding a database password into the
+                build is the practice this step exists to remove.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <environmentVariables>
+                        <JWT_SECRET>test-only-jwt-signing-secret-not-used-by-any-environment</JWT_SECRET>
+                    </environmentVariables>
+                </configuration>
+            </plugin>
+            <!--
                 Packages the application into a single executable "fat jar"
                 (mvn package) and provides the mvn spring-boot:run command.
             -->
