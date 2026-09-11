@@ -69,6 +69,12 @@ public class JwtService {
 
     private final SecretKey signingKey;
 
+    /** Stamped as {@code iss} on every token issued, and required on every token accepted. */
+    private final String issuer;
+
+    /** Stamped as {@code aud} on every token issued, and required on every token accepted. */
+    private final String audience;
+
     /**
      * Builds the signing key once, at startup.
      *
@@ -95,12 +101,25 @@ public class JwtService {
      *       bits and refuses a shorter key rather than signing weakly.</li>
      * </ul>
      *
-     * @param secret the configured signing secret, from {@code jwt.secret}
+     * <p>The issuer and audience are then checked for blankness, for the same
+     * reason as the secret: Spring's {@code ${JWT_ISSUER}} and
+     * {@code ${JWT_AUDIENCE}} placeholders stop the context when either
+     * variable is absent, but an empty variable resolves to an empty string,
+     * which is not a name anything should be issued under.</p>
+     *
+     * @param secret   the configured signing secret, from {@code jwt.secret}
+     * @param issuer   the name stamped as {@code iss} and required on every
+     *                 token, from {@code jwt.issuer}
+     * @param audience the name stamped as {@code aud} and required on every
+     *                 token, from {@code jwt.audience}
      * @throws IllegalStateException if the secret is blank, is the retired
      *                               development placeholder, or is too short
-     *                               to sign safely
+     *                               to sign safely, or if the issuer or the
+     *                               audience is blank
      */
-    public JwtService(@Value("${jwt.secret}") String secret) {
+    public JwtService(@Value("${jwt.secret}") String secret,
+            @Value("${jwt.issuer}") String issuer,
+            @Value("${jwt.audience}") String audience) {
         if (secret == null || secret.isBlank()) {
             throw new IllegalStateException(
                     "jwt.secret resolved to a blank value. Set the JWT_SECRET environment"
@@ -125,7 +144,21 @@ public class JwtService {
                             + " bytes. Set the JWT_SECRET environment variable to a longer value.");
         }
 
+        if (issuer == null || issuer.isBlank()) {
+            throw new IllegalStateException(
+                    "jwt.issuer resolved to a blank value. Set the JWT_ISSUER environment variable"
+                            + " to the name this deployment issues tokens under.");
+        }
+
+        if (audience == null || audience.isBlank()) {
+            throw new IllegalStateException(
+                    "jwt.audience resolved to a blank value. Set the JWT_AUDIENCE environment"
+                            + " variable to the name of the API these tokens are for.");
+        }
+
         this.signingKey = Keys.hmacShaKeyFor(keyBytes);
+        this.issuer = issuer;
+        this.audience = audience;
     }
 
     /**
@@ -166,6 +199,9 @@ public class JwtService {
      * <ul>
      *   <li><b>subject</b> - who the token is about. The username, because that
      *       is what identifies an account everywhere else in this system.</li>
+     *   <li><b>issuer</b> and <b>audience</b> - who issued it and which API it
+     *       is for, both from configuration. {@link #extractUsername} refuses
+     *       any token that does not carry exactly these two values.</li>
      *   <li><b>issued at</b> and <b>expiration</b> - when it was minted and
      *       when it stops counting.</li>
      * </ul>
@@ -186,6 +222,8 @@ public class JwtService {
 
         return Jwts.builder()
                 .subject(userDetails.getUsername())
+                .issuer(issuer)
+                .audience().add(audience).and()
                 .issuedAt(Date.from(issuedAt))
                 .expiration(Date.from(expiresAt))
                 .signWith(signingKey, Jwts.SIG.HS256)
@@ -202,7 +240,7 @@ public class JwtService {
      * signature is checked against the same key used to sign, and a subject is
      * only ever returned from a token this server actually issued.</p>
      *
-     * <p>Three things are checked, all by the parser rather than by hand:</p>
+     * <p>Five things are checked, all by the parser rather than by hand:</p>
      * <ul>
      *   <li><b>Structure</b> - anything that is not a well formed JWS is
      *       rejected, including a token that is merely truncated.</li>
@@ -210,6 +248,10 @@ public class JwtService {
      *       altered character in the payload makes it fail.</li>
      *   <li><b>Expiration</b> - the parser compares the {@code exp} claim
      *       against the clock and refuses a token that has run out.</li>
+     *   <li><b>Issuer</b> and <b>audience</b> - both must be present and must
+     *       equal the configured values exactly. A token minted by another
+     *       deployment that shares this key, or one issued before these claims
+     *       existed, is refused.</li>
      * </ul>
      *
      * <p>Failure is an exception, not a null or a false. A method that returned
@@ -220,12 +262,16 @@ public class JwtService {
      * @param token the compact JWS from the Authorization header
      * @return the subject of a token that passed every check
      * @throws io.jsonwebtoken.JwtException if the token is malformed, expired,
-     *                                      unsupported or wrongly signed
+     *                                      unsupported or wrongly signed, or its
+     *                                      issuer or audience is missing or
+     *                                      wrong
      * @throws IllegalArgumentException     if the token is null or blank
      */
     public String extractUsername(String token) {
         return Jwts.parser()
                 .verifyWith(signingKey)
+                .requireIssuer(issuer)
+                .requireAudience(audience)
                 .build()
                 .parseSignedClaims(token)
                 .getPayload()

@@ -34,6 +34,7 @@ import com.library.lms.repository.LibraryRepository;
 import com.library.lms.repository.UserRepository;
 
 import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.JwtBuilder;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 
@@ -100,6 +101,13 @@ class LoginTokenClaimsIntegrationTest {
     /** The application's signing key; read to parse and forge, never printed. */
     @Value("${jwt.secret}")
     private String jwtSecret;
+
+    /** What this application stamps on, and demands of, every token. */
+    @Value("${jwt.issuer}")
+    private String jwtIssuer;
+
+    @Value("${jwt.audience}")
+    private String jwtAudience;
 
     private User member;
     private User librarian;
@@ -185,7 +193,7 @@ class LoginTokenClaimsIntegrationTest {
     // ---------- the claim is gone ----------
 
     @Test
-    void aLoginTokenCarriesOnlyTheSubjectAndItsLifetime() {
+    void aLoginTokenCarriesSubjectIssuerAudienceAndLifetimeButNoRole() {
         // A staff token is the one where a role claim would most tempt someone
         // to trust it, so both are checked.
         for (User account : List.of(member, librarian)) {
@@ -196,7 +204,9 @@ class LoginTokenClaimsIntegrationTest {
             assertThat(claims).as("no role claim in %s's token", account.getUsername()).doesNotContainKey("roles");
             assertThat(claims.keySet())
                     .as("the complete claim set issued at login")
-                    .containsExactlyInAnyOrder("sub", "iat", "exp");
+                    .containsExactlyInAnyOrder("sub", "iat", "exp", "iss", "aud");
+            assertThat(claims.getIssuer()).as("issuer").isEqualTo(jwtIssuer);
+            assertThat(claims.getAudience()).as("audience").containsExactly(jwtAudience);
         }
     }
 
@@ -234,16 +244,85 @@ class LoginTokenClaimsIntegrationTest {
         assertThat(status(get(STAFF_ONLY), memberToken)).as("same token, role granted in the database").isEqualTo(200);
     }
 
+    // ---------- issuer and audience are enforced ----------
+
+    /**
+     * Mints a token for the member with the application's own key, so the
+     * signature is always genuine and only the issuer and audience vary.
+     * {@code null} leaves that claim out entirely.
+     */
+    private String mint(String issuer, String audience) {
+        JwtBuilder builder = Jwts.builder()
+                .subject(member.getUsername())
+                .issuedAt(new Date())
+                .expiration(Date.from(Instant.now().plus(Duration.ofMinutes(10))));
+        if (issuer != null) {
+            builder.issuer(issuer);
+        }
+        if (audience != null) {
+            builder.audience().add(audience).and();
+        }
+        return builder.signWith(applicationKey(), Jwts.SIG.HS256).compact();
+    }
+
+    /** The existing invalid-token answer: 401 from the entry point, unchanged. */
+    private void assertRefused(String label, String token) throws Exception {
+        MvcResult result = mockMvc.perform(get("/api/books")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andReturn();
+
+        assertThat(result.getResponse().getStatus()).as(label).isEqualTo(401);
+        assertThat(objectMapper.readTree(result.getResponse().getContentAsString()).path("message").asText())
+                .as(label)
+                .isEqualTo("Authentication required");
+    }
+
+    @Test
+    void aHandMintedTokenWithTheRightIssuerAndAudienceAuthenticates() throws Exception {
+        // The control for every refusal below: the same helper, the same key,
+        // only right. Without it a 401 further down could mean the helper was
+        // broken rather than the claim was wrong.
+        assertThat(status(get("/api/books"), mint(jwtIssuer, jwtAudience))).isEqualTo(200);
+    }
+
+    @Test
+    void aWrongIssuerIsRefused() throws Exception {
+        assertRefused("wrong issuer", mint("some-other-issuer", jwtAudience));
+    }
+
+    @Test
+    void aWrongAudienceIsRefused() throws Exception {
+        assertRefused("wrong audience", mint(jwtIssuer, "some-other-api"));
+    }
+
+    @Test
+    void aMissingIssuerIsRefused() throws Exception {
+        assertRefused("missing issuer", mint(null, jwtAudience));
+    }
+
+    @Test
+    void aMissingAudienceIsRefused() throws Exception {
+        assertRefused("missing audience", mint(jwtIssuer, null));
+    }
+
+    @Test
+    void aTokenIssuedBeforeIssuerAndAudienceExistedIsRefused() throws Exception {
+        // Exactly the shape the application issued until this change: subject
+        // and lifetime, genuinely signed. Deliberately no longer accepted.
+        assertRefused("pre-issuer/audience token", mint(null, null));
+    }
+
     // ---------- a roles claim is still not trusted ----------
 
     @Test
     void aForgedRolesClaimCannotElevateAMember() throws Exception {
-        // Signed with the real key, so the signature is genuine and the token
-        // authenticates; only the roles claim is a lie. It also stands in for a
-        // token issued before this change, which carried a roles claim of its
-        // own: such a token must still be accepted, and its claim ignored.
+        // Signed with the real key and carrying the right issuer and audience,
+        // so the token is valid in every respect and authenticates; only the
+        // roles claim is a lie.
         String forged = Jwts.builder()
                 .subject(member.getUsername())
+                .issuer(jwtIssuer)
+                .audience().add(jwtAudience).and()
                 .claim("roles", List.of("ROLE_ADMIN", "ROLE_LIBRARIAN"))
                 .issuedAt(new Date())
                 .expiration(Date.from(Instant.now().plus(Duration.ofMinutes(10))))

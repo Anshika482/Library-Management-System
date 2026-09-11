@@ -105,6 +105,17 @@ class SecurityHttpIntegrationTest {
     @Value("${jwt.secret}")
     private String jwtSecret;
 
+    /**
+     * The issuer and audience the application demands. Every hand-built token
+     * below carries the right pair, so each one is refused - or, for the forged
+     * role, accepted - for its own reason and not for a missing claim.
+     */
+    @Value("${jwt.issuer}")
+    private String jwtIssuer;
+
+    @Value("${jwt.audience}")
+    private String jwtAudience;
+
     private String adminToken;
     private String librarianToken;
     private String memberToken;
@@ -320,6 +331,8 @@ class SecurityHttpIntegrationTest {
         Instant past = Instant.now().minus(2, ChronoUnit.HOURS);
         String expired = Jwts.builder()
                 .subject(memberUsername)
+                .issuer(jwtIssuer)
+                .audience().add(jwtAudience).and()
                 .claim("roles", List.of("ROLE_MEMBER"))
                 .issuedAt(Date.from(past))
                 .expiration(Date.from(past.plus(1, ChronoUnit.HOURS)))
@@ -335,6 +348,8 @@ class SecurityHttpIntegrationTest {
                 "a-completely-different-key-of-sufficient-length-32".getBytes(StandardCharsets.UTF_8));
         String wronglySigned = Jwts.builder()
                 .subject(memberUsername)
+                .issuer(jwtIssuer)
+                .audience().add(jwtAudience).and()
                 .expiration(Date.from(Instant.now().plus(1, ChronoUnit.HOURS)))
                 .signWith(otherKey, Jwts.SIG.HS256)
                 .compact();
@@ -378,6 +393,8 @@ class SecurityHttpIntegrationTest {
         // valid and the token parses. Only the roles claim is a lie.
         String forged = Jwts.builder()
                 .subject(memberUsername)
+                .issuer(jwtIssuer)
+                .audience().add(jwtAudience).and()
                 .claim("roles", List.of("ROLE_ADMIN", "ROLE_LIBRARIAN"))
                 .issuedAt(Date.from(Instant.now()))
                 .expiration(Date.from(Instant.now().plus(1, ChronoUnit.HOURS)))

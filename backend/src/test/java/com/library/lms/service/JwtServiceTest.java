@@ -40,6 +40,10 @@ class JwtServiceTest {
     private static final String TEST_SECRET =
             "test-only-secret-for-unit-tests-not-used-by-any-environment";
 
+    private static final String TEST_ISSUER = "jwt-service-test-issuer";
+
+    private static final String TEST_AUDIENCE = "jwt-service-test-audience";
+
     private static final SecretKey TEST_KEY =
             Keys.hmacShaKeyFor(TEST_SECRET.getBytes(StandardCharsets.UTF_8));
 
@@ -47,7 +51,7 @@ class JwtServiceTest {
 
     private static final String TEST_AUTHORITY = "ROLE_MEMBER";
 
-    private final JwtService jwtService = new JwtService(TEST_SECRET);
+    private final JwtService jwtService = new JwtService(TEST_SECRET, TEST_ISSUER, TEST_AUDIENCE);
 
     private static UserDetails testUser() {
         return User.withUsername(TEST_USERNAME)
@@ -70,17 +74,20 @@ class JwtServiceTest {
     }
 
     @Test
-    void tokenCarriesSubjectAndLifetimeButNoRole() {
+    void tokenCarriesSubjectIssuerAudienceAndLifetimeButNoRole() {
         Claims claims = claimsOf(jwtService.generateToken(testUser()));
 
         assertThat(claims.getSubject()).isEqualTo(TEST_USERNAME);
         // No roles claim. Authorization reloads the caller's authorities from
         // the database on every request and never reads one, so the token
-        // carries only who it is about and how long it lasts.
+        // carries only who it is about, who issued it, who it is for, and how
+        // long it lasts.
         assertThat(claims).doesNotContainKey("roles");
         assertThat(claims.keySet())
                 .as("the complete claim set - nothing else rides along")
-                .containsExactlyInAnyOrder("sub", "iat", "exp");
+                .containsExactlyInAnyOrder("sub", "iat", "exp", "iss", "aud");
+        assertThat(claims.getIssuer()).isEqualTo(TEST_ISSUER);
+        assertThat(claims.getAudience()).containsExactly(TEST_AUDIENCE);
         assertThat(claims.getIssuedAt()).isNotNull();
         assertThat(claims.getExpiration()).isNotNull();
         assertThat(claims.getExpiration()).isAfter(claims.getIssuedAt());
@@ -113,6 +120,8 @@ class JwtServiceTest {
                 "an-entirely-different-key-the-server-never-issued".getBytes(StandardCharsets.UTF_8));
         String selfMinted = Jwts.builder()
                 .subject("admin")
+                .issuer(TEST_ISSUER)
+                .audience().add(TEST_AUDIENCE).and()
                 .claim("roles", List.of("ROLE_ADMIN"))
                 .issuedAt(Date.from(Instant.now()))
                 .expiration(Date.from(Instant.now().plus(1, ChronoUnit.HOURS)))
@@ -128,6 +137,8 @@ class JwtServiceTest {
         Instant issued = Instant.now().minus(2, ChronoUnit.HOURS);
         String expired = Jwts.builder()
                 .subject(TEST_USERNAME)
+                .issuer(TEST_ISSUER)
+                .audience().add(TEST_AUDIENCE).and()
                 .claim("roles", List.of(TEST_AUTHORITY))
                 .issuedAt(Date.from(issued))
                 .expiration(Date.from(issued.plus(1, ChronoUnit.HOURS)))

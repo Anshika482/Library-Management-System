@@ -34,6 +34,11 @@ class JwtServiceSecretValidationTest {
     private static final String ACCEPTABLE_SECRET =
             "step133-valid-test-secret-comfortably-over-thirty-two-bytes";
 
+    /** A valid issuer and audience, so every refusal below is about the secret alone. */
+    private static final String ISSUER = "secret-validation-test-issuer";
+
+    private static final String AUDIENCE = "secret-validation-test-audience";
+
     /**
      * The development placeholder that {@code application.properties} used to
      * carry as the fallback for {@code JWT_SECRET}.
@@ -53,7 +58,7 @@ class JwtServiceSecretValidationTest {
 
     @Test
     void theRetiredDevelopmentPlaceholderIsRefused() {
-        assertThatThrownBy(() -> new JwtService(RETIRED_PLACEHOLDER))
+        assertThatThrownBy(() -> new JwtService(RETIRED_PLACEHOLDER, ISSUER, AUDIENCE))
                 .as("the signing key published in this repository must not start the application")
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("placeholder");
@@ -75,21 +80,21 @@ class JwtServiceSecretValidationTest {
     void anEmptySecretIsRefused() {
         // JWT_SECRET= in the environment. The ${JWT_SECRET} placeholder
         // resolves happily to an empty string, so only this check stops it.
-        assertThatThrownBy(() -> new JwtService(""))
+        assertThatThrownBy(() -> new JwtService("", ISSUER, AUDIENCE))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("blank");
     }
 
     @Test
     void aWhitespaceOnlySecretIsRefused() {
-        assertThatThrownBy(() -> new JwtService("    "))
+        assertThatThrownBy(() -> new JwtService("    ", ISSUER, AUDIENCE))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("blank");
     }
 
     @Test
     void aNullSecretIsRefused() {
-        assertThatThrownBy(() -> new JwtService(null))
+        assertThatThrownBy(() -> new JwtService(null, ISSUER, AUDIENCE))
                 .as("a clear startup message, not a NullPointerException")
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("blank");
@@ -99,7 +104,7 @@ class JwtServiceSecretValidationTest {
 
     @Test
     void aSecretShorterThanHs256RequiresIsStillRefused() {
-        assertThatThrownBy(() -> new JwtService("far-too-short"))
+        assertThatThrownBy(() -> new JwtService("far-too-short", ISSUER, AUDIENCE))
                 .as("the original length check must survive the new ones")
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("too short");
@@ -112,14 +117,14 @@ class JwtServiceSecretValidationTest {
         String exactlyThirtyTwo = "0123456789abcdef0123456789abcdef";
 
         assertThat(exactlyThirtyTwo.length()).isEqualTo(32);
-        assertThatCode(() -> new JwtService(exactlyThirtyTwo)).doesNotThrowAnyException();
+        assertThatCode(() -> new JwtService(exactlyThirtyTwo, ISSUER, AUDIENCE)).doesNotThrowAnyException();
     }
 
     // ---------- the happy path still works ----------
 
     @Test
     void anAcceptableSecretBuildsTheService() {
-        assertThatCode(() -> new JwtService(ACCEPTABLE_SECRET)).doesNotThrowAnyException();
+        assertThatCode(() -> new JwtService(ACCEPTABLE_SECRET, ISSUER, AUDIENCE)).doesNotThrowAnyException();
     }
 
     // ---------- nothing leaks ----------
@@ -130,10 +135,10 @@ class JwtServiceSecretValidationTest {
         // message that echoed the value would put the rejected secret - which
         // on a misconfigured deployment may well be a real one from the wrong
         // environment - into that file.
-        assertThatThrownBy(() -> new JwtService(RETIRED_PLACEHOLDER))
+        assertThatThrownBy(() -> new JwtService(RETIRED_PLACEHOLDER, ISSUER, AUDIENCE))
                 .hasMessageNotContaining(RETIRED_PLACEHOLDER);
 
-        assertThatThrownBy(() -> new JwtService("far-too-short"))
+        assertThatThrownBy(() -> new JwtService("far-too-short", ISSUER, AUDIENCE))
                 .hasMessageNotContaining("far-too-short");
     }
 }

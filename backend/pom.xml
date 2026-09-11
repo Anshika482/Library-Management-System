@@ -214,6 +214,11 @@
                 integration tests use the developer's own MySQL credentials from
                 the environment, and hard-coding a database password into the
                 build is the practice this step exists to remove.
+
+                JWT_ISSUER and JWT_AUDIENCE are supplied for the same reason:
+                both are required with no fallback. Their values are plainly
+                labelled test names that no real deployment would use, so a
+                token minted in a test is refused everywhere else.
             -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -221,6 +226,8 @@
                 <configuration>
                     <environmentVariables>
                         <JWT_SECRET>test-only-jwt-signing-secret-not-used-by-any-environment</JWT_SECRET>
+                        <JWT_ISSUER>test-only-jwt-issuer</JWT_ISSUER>
+                        <JWT_AUDIENCE>test-only-jwt-audience</JWT_AUDIENCE>
                     </environmentVariables>
                 </configuration>
             </plugin>
