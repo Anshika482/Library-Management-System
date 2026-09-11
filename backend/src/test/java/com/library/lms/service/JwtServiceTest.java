@@ -70,11 +70,17 @@ class JwtServiceTest {
     }
 
     @Test
-    void tokenCarriesSubjectRolesAndLifetime() {
+    void tokenCarriesSubjectAndLifetimeButNoRole() {
         Claims claims = claimsOf(jwtService.generateToken(testUser()));
 
         assertThat(claims.getSubject()).isEqualTo(TEST_USERNAME);
-        assertThat(claims.get("roles", List.class)).containsExactly(TEST_AUTHORITY);
+        // No roles claim. Authorization reloads the caller's authorities from
+        // the database on every request and never reads one, so the token
+        // carries only who it is about and how long it lasts.
+        assertThat(claims).doesNotContainKey("roles");
+        assertThat(claims.keySet())
+                .as("the complete claim set - nothing else rides along")
+                .containsExactlyInAnyOrder("sub", "iat", "exp");
         assertThat(claims.getIssuedAt()).isNotNull();
         assertThat(claims.getExpiration()).isNotNull();
         assertThat(claims.getExpiration()).isAfter(claims.getIssuedAt());

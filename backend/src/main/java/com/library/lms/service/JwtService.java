@@ -7,12 +7,10 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Date;
 import java.util.HexFormat;
-import java.util.List;
 
 import javax.crypto.SecretKey;
 
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Service;
 
@@ -22,8 +20,8 @@ import io.jsonwebtoken.security.Keys;
 /**
  * Mints signed JSON Web Tokens.
  *
- * <p>A JWT is not encrypted. Anyone holding one can read the username and roles
- * inside it; what they cannot do is change them, because the signature would
+ * <p>A JWT is not encrypted. Anyone holding one can read the claims inside it;
+ * what they cannot do is change them, because the signature would
  * stop matching. That is the whole value of the thing: the server can trust a
  * token it issued earlier without keeping any session state to check it
  * against.</p>
@@ -168,30 +166,26 @@ public class JwtService {
      * <ul>
      *   <li><b>subject</b> - who the token is about. The username, because that
      *       is what identifies an account everywhere else in this system.</li>
-     *   <li><b>roles</b> - the authorities, so a later request can be
-     *       authorized without another database lookup.</li>
      *   <li><b>issued at</b> and <b>expiration</b> - when it was minted and
      *       when it stops counting.</li>
      * </ul>
      *
-     * <p>The password hash is not among them, and neither is anything else from
-     * the user row. A JWT payload is Base64, not ciphertext: every claim here
-     * is readable by whoever holds the token.</p>
+     * <p>No role is included. Authorization never reads one: the JWT filter
+     * reloads the caller's authorities from the database on every request, so a
+     * role in the token would be an unused copy that goes stale the moment the
+     * role changes. The password hash is not among the claims either, and
+     * neither is anything else from the user row. A JWT payload is Base64, not
+     * ciphertext: every claim here is readable by whoever holds the token.</p>
      *
      * @param userDetails the authenticated account
      * @return a signed, compact JWT
      */
     public String generateToken(UserDetails userDetails) {
-        List<String> roles = userDetails.getAuthorities().stream()
-                .map(GrantedAuthority::getAuthority)
-                .toList();
-
         Instant issuedAt = Instant.now();
         Instant expiresAt = issuedAt.plus(TOKEN_VALIDITY);
 
         return Jwts.builder()
                 .subject(userDetails.getUsername())
-                .claim("roles", roles)
                 .issuedAt(Date.from(issuedAt))
                 .expiration(Date.from(expiresAt))
                 .signWith(signingKey, Jwts.SIG.HS256)

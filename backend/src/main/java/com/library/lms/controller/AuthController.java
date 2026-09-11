@@ -39,11 +39,11 @@ public class AuthController {
     /**
      * What a successful login returns.
      *
-     * <p>One field, and deliberately still one. Authentication has just looked
-     * up the account, so returning the username or role alongside the token
-     * would cost nothing to implement - but the token already carries both, and
-     * a client that needs them can read them from it. Repeating them here would
-     * widen what this endpoint discloses without adding anything.</p>
+     * <p>One field: the token. Its only identity claim is the subject, the
+     * username. It carries no role, because the server never trusts one - the
+     * caller's authorities are reloaded from the database on every request - so
+     * a client that needs the role cannot read it from this response or from
+     * the token.</p>
      */
     public record LoginResponse(String token) {
     }
