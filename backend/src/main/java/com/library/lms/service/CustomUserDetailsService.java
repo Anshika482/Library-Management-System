@@ -1,6 +1,5 @@
 package com.library.lms.service;
 
-import org.springframework.data.domain.Example;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
@@ -46,16 +45,18 @@ public class CustomUserDetailsService implements UserDetailsService {
      * and UNIQUE. Email is also unique and could serve the same purpose, but
      * picking it would be inventing a convention the project does not have.</p>
      *
-     * <p>The lookup goes through Query By Example rather than a
-     * {@code findByUsername} method, because {@link UserRepository} declares no
-     * custom queries and this step may not add one. A probe carrying only the
-     * username still becomes a single {@code WHERE username = ?} against the
-     * unique index; no table is loaded into memory. See the class note in the
-     * step report for why a derived query is the better long term shape.</p>
+     * <p>The lookup is {@link UserRepository#findByUsername(String)}, the same
+     * finder the book, category and transaction services use to resolve the
+     * caller. It is a derived query - Spring Data builds
+     * {@code WHERE username = ?} from the method name - so it runs against the
+     * unique index and loads at most one row. The name is passed through
+     * untouched, neither trimmed nor lower-cased, so whether two spellings match
+     * is decided by the column's collation rather than by this class.</p>
      *
-     * <p>The blank check is not defensive noise. Query By Example ignores null
-     * fields, so an empty probe would match every row and turn a missing
-     * username into "too many results" rather than "not found".</p>
+     * <p>A blank or missing name is refused before the repository is called,
+     * so such a request never reaches the database. It fails with the same
+     * exception and the same message as a name that simply does not exist, so
+     * the two cannot be told apart from outside.</p>
      *
      * <p>The returned object carries the stored BCrypt hash because that is
      * what the contract requires: Spring Security compares a submitted password
@@ -75,10 +76,7 @@ public class CustomUserDetailsService implements UserDetailsService {
             throw new UsernameNotFoundException("No account matches the supplied credentials");
         }
 
-        User probe = new User();
-        probe.setUsername(username);
-
-        User user = userRepository.findOne(Example.of(probe))
+        User user = userRepository.findByUsername(username)
                 .orElseThrow(() -> new UsernameNotFoundException("No account matches the supplied credentials"));
 
         // Two different classes are called User here: ours above, Spring
