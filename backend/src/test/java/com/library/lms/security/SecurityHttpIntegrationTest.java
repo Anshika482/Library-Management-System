@@ -3,6 +3,7 @@ package com.library.lms.security;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.head;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 
@@ -10,7 +11,9 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Date;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import javax.crypto.SecretKey;
@@ -324,6 +327,55 @@ class SecurityHttpIntegrationTest {
         }
     }
 
+    // ---------- 7b: staff-only reads, by every method ----------
+
+    /** The two read paths only staff may use. */
+    private static List<String> staffOnlyReadPaths() {
+        return List.of("/api/transactions/status/ISSUED", "/api/transactions/book/999999");
+    }
+
+    /**
+     * GET and HEAD on each staff-only read path, keyed "METHOD path", so a
+     * failure shows every combination at once rather than stopping at the first.
+     */
+    private Map<String, Integer> getAndHeadStatuses(String token) throws Exception {
+        Map<String, Integer> statuses = new LinkedHashMap<>();
+        for (String path : staffOnlyReadPaths()) {
+            statuses.put("GET " + path, status(get(path), token));
+            statuses.put("HEAD " + path, status(head(path), token));
+        }
+        return statuses;
+    }
+
+    private static Map<String, Integer> every(int expectedStatus) {
+        Map<String, Integer> statuses = new LinkedHashMap<>();
+        for (String path : staffOnlyReadPaths()) {
+            statuses.put("GET " + path, expectedStatus);
+            statuses.put("HEAD " + path, expectedStatus);
+        }
+        return statuses;
+    }
+
+    @Test
+    void aMemberIsForbiddenFromStaffOnlyReadsByGetAndByHead() throws Exception {
+        // HEAD is the case that slipped through. The rules for these paths named
+        // GET, HEAD is not GET, and Spring MVC answers HEAD from the GET handler -
+        // so a member's HEAD fell through to authenticated() and ran the
+        // staff-only query. The body is dropped for HEAD; the query still ran.
+        assertThat(getAndHeadStatuses(memberToken)).containsExactlyEntriesOf(every(403));
+    }
+
+    @Test
+    void staffStillReachStaffOnlyReadsByGetAndByHead() throws Exception {
+        assertThat(getAndHeadStatuses(librarianToken)).as("librarian").containsExactlyEntriesOf(every(200));
+        assertThat(getAndHeadStatuses(adminToken)).as("admin").containsExactlyEntriesOf(every(200));
+    }
+
+    @Test
+    void anonymousCallersStillGet401OnStaffOnlyReadsByGetAndByHead() throws Exception {
+        assertThat(getAndHeadStatuses(null)).containsExactlyEntriesOf(every(401));
+    }
+
     // ---------- 8-10: bad tokens ----------
 
     @Test
@@ -359,10 +411,18 @@ class SecurityHttpIntegrationTest {
 
     @Test
     void aTamperedJwtIsUnauthorized() throws Exception {
-        // Flip the last character of a genuine token's signature.
-        char last = memberToken.charAt(memberToken.length() - 1);
-        String tampered = memberToken.substring(0, memberToken.length() - 1)
-                + (last == 'A' ? 'B' : 'A');
+        // Change the FIRST character of a genuine token's signature. Not the
+        // last: an HS256 signature is 32 bytes, 43 Base64URL characters, and the
+        // final character carries only 4 signature bits plus 2 padding bits.
+        // Swapping 'A' for 'B' there touches padding alone, so about one run in
+        // sixteen the "tampered" token still verified and this test failed.
+        // Every bit of the first character is signature data.
+        int signatureStart = memberToken.lastIndexOf('.') + 1;
+        char first = memberToken.charAt(signatureStart);
+        String tampered = memberToken.substring(0, signatureStart)
+                + (first == 'A' ? 'B' : 'A')
+                + memberToken.substring(signatureStart + 1);
+        assertThat(tampered).as("the tamper must actually change the token").isNotEqualTo(memberToken);
 
         assertUnauthorized("tampered JWT", get("/api/books"), tampered);
     }

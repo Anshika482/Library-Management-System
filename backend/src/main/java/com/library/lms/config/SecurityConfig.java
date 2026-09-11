@@ -167,8 +167,13 @@ public class SecurityConfig {
 
                         .requestMatchers(HttpMethod.GET, "/api/books/**").authenticated()
                         .requestMatchers(HttpMethod.GET, "/api/categories/**").authenticated()
-                        .requestMatchers(HttpMethod.GET, "/api/transactions/book/**").hasAnyAuthority(ADMIN, LIBRARIAN)
-                        .requestMatchers(HttpMethod.GET, "/api/transactions/status/**").hasAnyAuthority(ADMIN, LIBRARIAN)
+                        // No HTTP method on these two, deliberately. A GET-only rule does
+                        // not match HEAD, yet Spring MVC serves HEAD from the GET handler,
+                        // so a member's HEAD fell through to the authenticated() rules
+                        // below and ran the staff-only query. Without a method, the rule
+                        // covers every verb on the path.
+                        .requestMatchers("/api/transactions/book/**").hasAnyAuthority(ADMIN, LIBRARIAN)
+                        .requestMatchers("/api/transactions/status/**").hasAnyAuthority(ADMIN, LIBRARIAN)
                         .requestMatchers(HttpMethod.GET, "/api/transactions/**").authenticated()
 
                         .anyRequest().authenticated())
