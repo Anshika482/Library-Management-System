@@ -1,9 +1,12 @@
 package com.library.lms.controller;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -26,6 +29,11 @@ import jakarta.validation.Valid;
 @RestController
 @RequestMapping("/api/auth")
 public class AuthController {
+
+    private static final Logger log = LoggerFactory.getLogger(AuthController.class);
+
+    /** Longest username this class will write into a log line. */
+    private static final int MAX_LOGGED_USERNAME = 64;
 
     private final AuthenticationManager authenticationManager;
 
@@ -76,12 +84,47 @@ public class AuthController {
      */
     @PostMapping("/login")
     public ResponseEntity<LoginResponse> login(@Valid @RequestBody LoginRequest loginRequest) {
-        Authentication authentication = authenticationManager.authenticate(
-                new UsernamePasswordAuthenticationToken(
-                        loginRequest.getUsername(), loginRequest.getPassword()));
+        Authentication authentication;
+
+        try {
+            authentication = authenticationManager.authenticate(
+                    new UsernamePasswordAuthenticationToken(
+                            loginRequest.getUsername(), loginRequest.getPassword()));
+        } catch (AuthenticationException exception) {
+            // Which username was tried, and nothing else. Not the password, and
+            // not whether the account exists - the type name says only how
+            // Spring Security classified the failure, and the caller is still
+            // told the one fixed message by the exception handler.
+            log.warn("Login failed for username='{}' ({})",
+                    forLog(loginRequest.getUsername()), exception.getClass().getSimpleName());
+            throw exception;
+        }
 
         UserDetails userDetails = (UserDetails) authentication.getPrincipal();
+        log.info("Login succeeded for username='{}'", forLog(userDetails.getUsername()));
 
         return ResponseEntity.ok(new LoginResponse(jwtService.generateToken(userDetails)));
+    }
+
+    /**
+     * Makes a submitted username safe to write into a log line.
+     *
+     * <p>The username arrives from the request body, so it is whatever the
+     * caller typed. A value containing a newline would otherwise end the log
+     * line and start one of the attacker's own - a forged entry, in the
+     * server's own log, indistinguishable from a real one. Control characters
+     * become underscores and the value is truncated, so one field cannot fill
+     * the log either.</p>
+     */
+    private static String forLog(String username) {
+        if (username == null) {
+            return "<none>";
+        }
+
+        String cleaned = username.replaceAll("\\p{Cntrl}", "_");
+
+        return cleaned.length() <= MAX_LOGGED_USERNAME
+                ? cleaned
+                : cleaned.substring(0, MAX_LOGGED_USERNAME) + "...";
     }
 }

@@ -2,6 +2,8 @@ package com.library.lms.config;
 
 import java.time.LocalDateTime;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -39,6 +41,8 @@ import com.library.lms.exception.GlobalExceptionHandler.ErrorResponse;
  */
 @Configuration
 public class SecurityConfig {
+
+    private static final Logger log = LoggerFactory.getLogger(SecurityConfig.class);
 
     /**
      * Authority strings, which must stay identical to the names of the
@@ -273,7 +277,10 @@ public class SecurityConfig {
      * <p>The message is a fixed sentence and the {@code AuthenticationException}
      * argument is deliberately never read. Whether the token was missing,
      * expired, forged or valid for a deleted account is information the caller
-     * has not earned, and nothing here is logged either.</p>
+     * has not earned. The request is recorded at DEBUG only: arriving without
+     * credentials is ordinary, and logging it at a level that is on by default
+     * would bury the failures that matter. A token that was presented and
+     * rejected is logged by {@link JwtAuthenticationFilter} instead.</p>
      *
      * @param objectMapper the application's configured JSON writer
      * @return an entry point that writes a 401 in the standard error shape
@@ -281,6 +288,13 @@ public class SecurityConfig {
     @Bean
     public AuthenticationEntryPoint restAuthenticationEntryPoint(ObjectMapper objectMapper) {
         return (request, response, authenticationException) -> {
+            // DEBUG, not WARN. Reaching a protected endpoint without credentials
+            // is ordinary - every client does it once before logging in, and
+            // every scanner does it constantly - so logging it at a level that
+            // is on by default would bury the failures that do matter. A token
+            // that was presented and rejected is logged by the JWT filter.
+            log.debug("Unauthenticated request to {} {}", request.getMethod(), request.getRequestURI());
+
             ErrorResponse errorResponse = new ErrorResponse(
                     HttpStatus.UNAUTHORIZED.value(),
                     "Authentication required",

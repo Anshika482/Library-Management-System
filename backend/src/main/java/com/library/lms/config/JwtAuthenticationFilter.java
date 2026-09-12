@@ -2,6 +2,8 @@ package com.library.lms.config;
 
 import java.io.IOException;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -42,6 +44,8 @@ import jakarta.servlet.http.HttpServletResponse;
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
+    private static final Logger log = LoggerFactory.getLogger(JwtAuthenticationFilter.class);
+
     /** The scheme prefix, trailing space included, that a Bearer header must start with. */
     private static final String BEARER_PREFIX = "Bearer ";
 
@@ -77,10 +81,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
      * at login and is not part of this request, so there is nothing to put
      * there and nothing to hold in memory.</p>
      *
-     * <p>Every failure path is silent. The catch clears the context rather than
-     * assuming it was already empty, writes nothing to a log, and lets the
-     * request continue. Nothing about why a token failed reaches the client,
-     * and the token itself is never recorded anywhere.</p>
+     * <p>Every failure path is silent <i>towards the caller</i>. The catch
+     * clears the context rather than assuming it was already empty and lets the
+     * request continue; authorization then answers 401, and nothing about why
+     * the token failed reaches the client. The reason is written to the server
+     * log instead, as the exception's type name - enough to tell an expired
+     * session from someone probing with forged tokens. The token itself is
+     * never recorded anywhere: it is a bearer credential, and a log file is no
+     * place to keep one.</p>
      */
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
@@ -107,6 +115,16 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             SecurityContextHolder.getContext().setAuthentication(authentication);
         } catch (JwtException | IllegalArgumentException | UsernameNotFoundException exception) {
             SecurityContextHolder.clearContext();
+
+            // The type name says why - expired, wrong signature, wrong issuer or
+            // audience, unknown account - which is what an operator needs to tell
+            // an expired session from someone probing with forged tokens. The
+            // token itself is never written: it is a bearer credential, and a log
+            // file is not a place to keep one. Neither is the exception's own
+            // message, which for a claim mismatch quotes the claim it compared.
+            log.warn("Rejected bearer token on {} {} from {}: {}",
+                    request.getMethod(), request.getRequestURI(), request.getRemoteAddr(),
+                    exception.getClass().getSimpleName());
         }
 
         filterChain.doFilter(request, response);

@@ -440,8 +440,10 @@ public class BookService {
     private Sort resolveSort(String sortBy, String direction) {
         String property = SORTABLE_FIELDS.get(sortBy);
         if (property == null) {
-            throw new InvalidSortException("Unsupported sort field: " + sortBy
-                    + ". Allowed fields are: "
+            // The rejected value is not repeated back: it is raw query-string
+            // input of any length and content. The allowed list is what makes
+            // the failure actionable, and it is fixed text.
+            throw new InvalidSortException("Unsupported sort field. Allowed fields are: "
                     + String.join(", ", new TreeSet<>(SORTABLE_FIELDS.keySet())));
         }
 
@@ -451,8 +453,8 @@ public class BookService {
         } else if ("desc".equalsIgnoreCase(direction)) {
             sortDirection = Sort.Direction.DESC;
         } else {
-            throw new InvalidSortException("Unsupported sort direction: " + direction
-                    + ". Allowed directions are: asc, desc");
+            throw new InvalidSortException(
+                    "Unsupported sort direction. Allowed directions are: asc, desc");
         }
 
         Sort sort = Sort.by(sortDirection, property);

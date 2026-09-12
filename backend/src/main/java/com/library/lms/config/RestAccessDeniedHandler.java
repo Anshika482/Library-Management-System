@@ -3,9 +3,13 @@ package com.library.lms.config;
 import java.io.IOException;
 import java.time.LocalDateTime;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.access.AccessDeniedHandler;
 import org.springframework.stereotype.Component;
 
@@ -42,8 +46,10 @@ import jakarta.servlet.http.HttpServletResponse;
  * {@link AccessDeniedException} argument is deliberately never read. Its text,
  * and anything a future Spring version adds to it, could name the rule that
  * refused the request, the authority it wanted, or the path; each of those tells
- * a caller exactly which role to go looking for. Nothing is logged either - the
- * request, the principal and the reason all stay out of it.</p>
+ * a caller exactly which role to go looking for. The refusal is recorded in the
+ * server log instead - who was refused, and which method and path they asked
+ * for - because a run of these is what a caller probing past their own role
+ * looks like.</p>
  *
  * <p><b>Not the same 403 as a refused loan.</b> A MEMBER reading someone else's
  * transaction is refused by the <i>service</i>, which throws
@@ -59,6 +65,8 @@ import jakarta.servlet.http.HttpServletResponse;
  */
 @Component
 public class RestAccessDeniedHandler implements AccessDeniedHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(RestAccessDeniedHandler.class);
 
     /** The one message every filter-level refusal carries. */
     private static final String MESSAGE = "Access denied.";
@@ -97,6 +105,16 @@ public class RestAccessDeniedHandler implements AccessDeniedHandler {
         if (response.isCommitted()) {
             return;
         }
+
+        // Who was refused what. The name comes from the account this request
+        // authenticated as, not from anything the caller typed, and the URI is
+        // logged as it arrived - still percent-encoded, so it cannot break the
+        // line. A repeated pattern here is a caller probing for endpoints their
+        // role does not cover.
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        log.warn("Access denied for username='{}' on {} {}",
+                authentication != null ? authentication.getName() : "<none>",
+                request.getMethod(), request.getRequestURI());
 
         ErrorResponse errorResponse = new ErrorResponse(
                 HttpStatus.FORBIDDEN.value(),

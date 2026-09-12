@@ -4,6 +4,8 @@ import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.stream.Collectors;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.MessageSourceResolvable;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
@@ -40,6 +42,8 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     /**
      * The shape of the JSON sent back when something goes wrong.
@@ -459,14 +463,23 @@ public class GlobalExceptionHandler {
      *
      * <p>When the target type is an enum the message lists the values that are
      * accepted, sorted so the text is stable, which turns a dead end into a
-     * usable correction. The rejected value is echoed back as data only - it is
-     * never interpreted.</p>
+     * usable correction. The rejected value itself is <b>not</b> repeated back:
+     * it is whatever the caller put in the URL, of any length and any content,
+     * and a client that renders error messages as HTML would render it. The
+     * parameter's name is the part that helps, and that is declared by the
+     * controller rather than sent by the caller.</p>
      */
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
     public ResponseEntity<ErrorResponse> handleTypeMismatch(MethodArgumentTypeMismatchException exception) {
         Class<?> requiredType = exception.getRequiredType();
 
-        String message = "Invalid value for '" + exception.getName() + "': " + exception.getValue();
+        // The parameter's name, never the value that was sent. The value is
+        // whatever the caller put in the URL, of any length and any content,
+        // and echoing it back is how a client that renders error messages as
+        // HTML ends up rendering someone else's markup. The name, and for an
+        // enum the list of values that would have worked, is what a caller
+        // needs to fix the request.
+        String message = "Invalid value for '" + exception.getName() + "'";
 
         if (requiredType != null && requiredType.isEnum()) {
             String allowed = Arrays.stream(requiredType.getEnumConstants())
@@ -640,6 +653,11 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<ErrorResponse> handleDataIntegrityViolation(DataIntegrityViolationException exception) {
+        // Where the detail this response withholds actually goes. These are
+        // rare enough not to be noise, and the constraint that failed is the
+        // whole diagnosis.
+        log.warn("Database integrity violation; answering with a generic 409", exception);
+
         ErrorResponse errorResponse = new ErrorResponse(
                 HttpStatus.CONFLICT.value(),
                 "Database operation could not be completed because it conflicts with existing data"
@@ -771,6 +789,11 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleUnexpectedException(Exception exception) {
+        // The one place the detail is kept. The caller gets the sentence below
+        // and nothing else, while the server log gets the exception and its
+        // stack trace - without which a 500 is invisible and undiagnosable.
+        log.error("Unhandled exception; answering with a generic 500", exception);
+
         ErrorResponse errorResponse = new ErrorResponse(
                 HttpStatus.INTERNAL_SERVER_ERROR.value(),
                 "An unexpected error occurred. Please try again later.",
