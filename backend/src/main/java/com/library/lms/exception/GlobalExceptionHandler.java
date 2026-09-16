@@ -371,6 +371,25 @@ public class GlobalExceptionHandler {
      * what 409 means, and it is the same reasoning as
      * {@link CategoryInUseException}.</p>
      */
+    /**
+     * Handles a book being issued to an account that cannot borrow it.
+     *
+     * <p><b>400 BAD REQUEST</b>: the request is well formed and the server is
+     * fine - the account named simply is not one a book may be lent to. The
+     * exception's own message is used, and it is a fixed sentence that covers
+     * every reason equally, so this reply cannot be used to discover whether a
+     * particular account is staff, disabled or locked.</p>
+     */
+    @ExceptionHandler(MemberNotEligibleException.class)
+    public ResponseEntity<ErrorResponse> handleMemberNotEligible(MemberNotEligibleException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.BAD_REQUEST.value(),
+                exception.getMessage(),
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorResponse);
+    }
+
     @ExceptionHandler(BookNotAvailableException.class)
     public ResponseEntity<ErrorResponse> handleBookNotAvailable(BookNotAvailableException exception) {
         ErrorResponse errorResponse = new ErrorResponse(

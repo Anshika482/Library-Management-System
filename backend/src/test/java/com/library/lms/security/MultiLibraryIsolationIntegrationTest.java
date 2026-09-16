@@ -54,8 +54,8 @@ import com.library.lms.repository.UserRepository;
  * category with the <i>same name</i> and a book with the <i>same ISBN</i>, so
  * any search, filter or lookup that forgot its library condition would return
  * two rows instead of one. Each library also has an issued loan belonging to
- * its member, stored directly because the API issues books only to the staff
- * member performing the action.</p>
+ * its member, written straight to the repository: the API can lend to a member,
+ * but seeding the row keeps this class about isolation rather than lending.</p>
  *
  * <p><b>Every check runs in both directions</b> - A against B's rows, then B
  * against A's - and for every role that applies, <b>ADMIN included</b>. ADMIN
@@ -275,9 +275,10 @@ class MultiLibraryIsolationIntegrationTest {
         return objectMapper.createObjectNode().put("name", name).toString();
     }
 
-    private String issueJson(Long bookId) {
+    private String issueJson(Long bookId, Long memberId) {
         return objectMapper.createObjectNode()
                 .put("bookId", bookId)
+                .put("memberId", memberId)
                 .put("dueDate", LocalDate.now().plusDays(7).toString())
                 .toString();
     }
@@ -517,7 +518,7 @@ class MultiLibraryIsolationIntegrationTest {
 
             assertLooksMissing(d.label() + " issue the other library's book",
                     call(post("/api/transactions/issue").contentType(MediaType.APPLICATION_JSON)
-                            .content(issueJson(theirBook.getId())), token),
+                            .content(issueJson(theirBook.getId(), d.self().member().getId())), token),
                     "Book not found with id: ", theirBook.getId());
             assertLooksMissing(d.label() + " return the other library's loan",
                     call(post("/api/transactions/{id}/return", theirLoan.getId()), token),
@@ -540,7 +541,7 @@ class MultiLibraryIsolationIntegrationTest {
             Long bookId = d.self().book().getId();
 
             MvcResult issued = call(post("/api/transactions/issue").contentType(MediaType.APPLICATION_JSON)
-                    .content(issueJson(bookId)), token);
+                    .content(issueJson(bookId, d.self().member().getId())), token);
             assertThat(status(issued)).as("%s issue own book", d.label()).isEqualTo(201);
             Long loanId = json(issued).path("id").asLong();
 
@@ -549,8 +550,8 @@ class MultiLibraryIsolationIntegrationTest {
                     .isEqualTo(d.self().library().getId());
             assertThat(stored.getBook().getId()).as("%s loan's book", d.label()).isEqualTo(bookId);
             assertThat(stored.getUser().getId())
-                    .as("%s loan's user (the API issues to the acting staff member)", d.label())
-                    .isEqualTo(d.self().librarian().getId());
+                    .as("%s the borrower is the member, not the staff member who lent it", d.label())
+                    .isEqualTo(d.self().member().getId());
             assertThat(bookRepository.findById(bookId).orElseThrow().getAvailableCopies()).isZero();
 
             assertLooksMissing(d.label() + " other library reads the new loan",

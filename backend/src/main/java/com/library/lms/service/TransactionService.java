@@ -27,6 +27,7 @@ import com.library.lms.exception.BookNotFoundException;
 import com.library.lms.exception.InvalidDueDateException;
 import com.library.lms.exception.InvalidPaginationException;
 import com.library.lms.exception.InvalidSortException;
+import com.library.lms.exception.MemberNotEligibleException;
 import com.library.lms.exception.ReturnBookNotAllowedException;
 import com.library.lms.exception.TransactionAccessDeniedException;
 import com.library.lms.exception.TransactionNotFoundException;
@@ -152,7 +153,7 @@ public class TransactionService {
      *                                   the loan
      */
     @Transactional
-    public TransactionResponse issueBook(Long bookId, String username, LocalDate dueDate) {
+    public TransactionResponse issueBook(Long bookId, Long memberId, String username, LocalDate dueDate) {
         // Stamped once, here, and used for both the check below and the stored
         // row. Calling LocalDate.now() twice would compare one instant and save
         // another, which is the whole failure this guard exists to prevent.
@@ -187,6 +188,24 @@ public class TransactionService {
         Book book = bookRepository.findByIdAndLibraryId(bookId, library.getId())
                 .orElseThrow(() -> new BookNotFoundException(bookId));
 
+        // The borrower, resolved the same way the book is: by id within the
+        // caller's own library. A member of another library is therefore not
+        // found at all, which is the same answer an id belonging to nobody
+        // gets - the refusal says nothing about whether the account exists
+        // somewhere else.
+        User borrower = userRepository.findByIdAndLibraryId(memberId, library.getId())
+                .orElseThrow(() -> new UserNotFoundException(memberId));
+
+        // Three separate reasons an account cannot take a book home, all
+        // answered identically: it is staff rather than a member, it has been
+        // disabled, or it has been locked. Distinguishing them here would make
+        // this endpoint a way to read another account's status.
+        if (borrower.getRole() != Role.ROLE_MEMBER
+                || !borrower.isEnabled()
+                || !borrower.isAccountNonLocked()) {
+            throw new MemberNotEligibleException();
+        }
+
         Integer availableCopies = book.getAvailableCopies();
 
         // A null check as well as a zero check: the column is NOT NULL, but the
@@ -204,13 +223,16 @@ public class TransactionService {
 
         Transaction transaction = new Transaction();
         transaction.setBook(book);
-        transaction.setUser(user);
+
+        // The member, never the member of staff who processed it. The loan has
+        // to name whoever actually has the book.
+        transaction.setUser(borrower);
 
         // The owning library comes from the caller's own account, never from
-        // the request. Because the book was fetched within that same library
-        // and the borrower is that same account, the three agree by
-        // construction rather than by a check afterwards:
-        // transaction.library == user.library == book.library.
+        // the request. Because the book and the borrower were both fetched
+        // within that same library, the three agree by construction rather
+        // than by a check afterwards:
+        // transaction.library == borrower.library == book.library.
         transaction.setLibrary(library);
 
         transaction.setIssueDate(issueDate);

@@ -67,6 +67,8 @@ class OptimisticLockingTest {
 
     private static final Long BOOK_ID = 100L;
 
+    private static final Long MEMBER_ID = 55L;
+
     private static final Long TRANSACTION_ID = 900L;
 
     private static final LocalDate DUE_DATE = LocalDate.now().plusDays(14);
@@ -149,6 +151,17 @@ class OptimisticLockingTest {
         when(userRepository.findByUsername(CALLER)).thenReturn(Optional.of(caller()));
     }
 
+    /** The member a book is issued to, looked up inside the caller's library. */
+    private void memberIsKnown() {
+        User member = new User();
+        member.setId(MEMBER_ID);
+        member.setUsername("a-member");
+        member.setRole(Role.ROLE_MEMBER);
+        member.setLibrary(library());
+
+        when(userRepository.findByIdAndLibraryId(MEMBER_ID, LIBRARY_ID)).thenReturn(Optional.of(member));
+    }
+
     /** A clash reported exactly as Spring Data reports a failed version check. */
     private static ObjectOptimisticLockingFailureException clash(Class<?> type, Object id) {
         return new ObjectOptimisticLockingFailureException(type, id);
@@ -195,9 +208,10 @@ class OptimisticLockingTest {
         callerIsKnown();
         when(bookRepository.findByIdAndLibraryId(BOOK_ID, LIBRARY_ID))
                 .thenReturn(Optional.of(book(3, 1)));
+        memberIsKnown();
         when(bookRepository.save(any(Book.class))).thenThrow(clash(Book.class, BOOK_ID));
 
-        assertThatThrownBy(() -> transactionService.issueBook(BOOK_ID, CALLER, DUE_DATE))
+        assertThatThrownBy(() -> transactionService.issueBook(BOOK_ID, MEMBER_ID, CALLER, DUE_DATE))
                 .isInstanceOf(ObjectOptimisticLockingFailureException.class);
 
         // The exact defect from the audit: two callers both saw the last copy.
@@ -254,7 +268,7 @@ class OptimisticLockingTest {
     @Test
     void issueAndReturnRemainTransactional() throws Exception {
         assertThat(TransactionService.class
-                .getMethod("issueBook", Long.class, String.class, LocalDate.class)
+                .getMethod("issueBook", Long.class, Long.class, String.class, LocalDate.class)
                 .getAnnotation(Transactional.class))
                 .isNotNull();
         assertThat(TransactionService.class
@@ -270,9 +284,10 @@ class OptimisticLockingTest {
         callerIsKnown();
         Book book = book(3, 3);
         when(bookRepository.findByIdAndLibraryId(BOOK_ID, LIBRARY_ID)).thenReturn(Optional.of(book));
+        memberIsKnown();
         when(transactionRepository.save(any(Transaction.class))).thenAnswer(i -> i.getArgument(0));
 
-        TransactionResponse response = transactionService.issueBook(BOOK_ID, CALLER, DUE_DATE);
+        TransactionResponse response = transactionService.issueBook(BOOK_ID, MEMBER_ID, CALLER, DUE_DATE);
 
         assertThat(response.getStatus()).isEqualTo(TransactionStatus.ISSUED);
         assertThat(book.getAvailableCopies()).isEqualTo(2);

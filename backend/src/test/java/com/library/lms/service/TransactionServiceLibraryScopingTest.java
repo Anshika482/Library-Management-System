@@ -150,6 +150,16 @@ class TransactionServiceLibraryScopingTest {
         when(userRepository.findByUsername(caller.getUsername())).thenReturn(Optional.of(caller));
     }
 
+    /**
+     * Stubs the borrower lookup, which is scoped to the caller's library exactly
+     * as the book lookup is. Only the tests that get as far as a borrower stub
+     * it - a cross-library book is refused before the borrower is ever read.
+     */
+    private void memberIsFound() {
+        when(userRepository.findByIdAndLibraryId(USER_A_ID, LIBRARY_A_ID))
+                .thenReturn(Optional.of(memberOfA("member-of-a")));
+    }
+
     private void echoSavedTransaction() {
         when(transactionRepository.save(any(Transaction.class))).thenAnswer(invocation -> {
             Transaction saved = invocation.getArgument(0);
@@ -168,7 +178,7 @@ class TransactionServiceLibraryScopingTest {
         // B's book is simply not on A's shelf, so the scoped query finds nothing.
         when(bookRepository.findByIdAndLibraryId(BOOK_B_ID, LIBRARY_A_ID)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> transactionService.issueBook(BOOK_B_ID, CALLER_A, DUE_DATE))
+        assertThatThrownBy(() -> transactionService.issueBook(BOOK_B_ID, USER_A_ID, CALLER_A, DUE_DATE))
                 .isInstanceOf(BookNotFoundException.class);
 
         verify(bookRepository).findByIdAndLibraryId(BOOK_B_ID, LIBRARY_A_ID);
@@ -182,7 +192,7 @@ class TransactionServiceLibraryScopingTest {
         callerIs(staffOfA());
         when(bookRepository.findByIdAndLibraryId(BOOK_B_ID, LIBRARY_A_ID)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> transactionService.issueBook(BOOK_B_ID, CALLER_A, DUE_DATE))
+        assertThatThrownBy(() -> transactionService.issueBook(BOOK_B_ID, USER_A_ID, CALLER_A, DUE_DATE))
                 .isInstanceOf(BookNotFoundException.class);
 
         // The whole fix in one assertion: the global lookup is not merely
@@ -195,7 +205,7 @@ class TransactionServiceLibraryScopingTest {
         callerIs(staffOfA());
         when(bookRepository.findByIdAndLibraryId(BOOK_B_ID, LIBRARY_A_ID)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> transactionService.issueBook(BOOK_B_ID, CALLER_A, DUE_DATE))
+        assertThatThrownBy(() -> transactionService.issueBook(BOOK_B_ID, USER_A_ID, CALLER_A, DUE_DATE))
                 .isInstanceOf(BookNotFoundException.class);
 
         verify(transactionRepository, never()).save(any(Transaction.class));
@@ -212,9 +222,9 @@ class TransactionServiceLibraryScopingTest {
         when(bookRepository.findByIdAndLibraryId(999_999L, LIBRARY_A_ID)).thenReturn(Optional.empty());
 
         Throwable foreign = catchThrowable(
-                () -> transactionService.issueBook(BOOK_B_ID, CALLER_A, DUE_DATE));
+                () -> transactionService.issueBook(BOOK_B_ID, USER_A_ID, CALLER_A, DUE_DATE));
         Throwable missing = catchThrowable(
-                () -> transactionService.issueBook(999_999L, CALLER_A, DUE_DATE));
+                () -> transactionService.issueBook(999_999L, USER_A_ID, CALLER_A, DUE_DATE));
 
         assertThat(foreign).isInstanceOf(BookNotFoundException.class);
         assertThat(missing.getClass()).isEqualTo(foreign.getClass());
@@ -232,9 +242,10 @@ class TransactionServiceLibraryScopingTest {
         Book bookA = book(BOOK_A_ID, LIBRARY_A, 3, 3);
         callerIs(caller);
         when(bookRepository.findByIdAndLibraryId(BOOK_A_ID, LIBRARY_A_ID)).thenReturn(Optional.of(bookA));
+        memberIsFound();
         echoSavedTransaction();
 
-        TransactionResponse response = transactionService.issueBook(BOOK_A_ID, CALLER_A, DUE_DATE);
+        TransactionResponse response = transactionService.issueBook(BOOK_A_ID, USER_A_ID, CALLER_A, DUE_DATE);
 
         assertThat(response.getBookId()).isEqualTo(BOOK_A_ID);
         assertThat(response.getUserId()).isEqualTo(USER_A_ID);
@@ -249,9 +260,10 @@ class TransactionServiceLibraryScopingTest {
         Book bookA = book(BOOK_A_ID, LIBRARY_A, 3, 3);
         callerIs(caller);
         when(bookRepository.findByIdAndLibraryId(BOOK_A_ID, LIBRARY_A_ID)).thenReturn(Optional.of(bookA));
+        memberIsFound();
         echoSavedTransaction();
 
-        transactionService.issueBook(BOOK_A_ID, CALLER_A, DUE_DATE);
+        transactionService.issueBook(BOOK_A_ID, USER_A_ID, CALLER_A, DUE_DATE);
 
         ArgumentCaptor<Transaction> captor = ArgumentCaptor.forClass(Transaction.class);
         verify(transactionRepository).save(captor.capture());
@@ -268,9 +280,9 @@ class TransactionServiceLibraryScopingTest {
     void theLibraryIsNeverTakenFromTheRequest() {
         assertThat(Arrays.stream(IssueBookRequest.class.getDeclaredFields())
                 .map(java.lang.reflect.Field::getName))
-                .as("a tenant id must never be client-supplied")
+                .as("naming the borrower is fine; naming their tenant would not be")
                 .doesNotContain("libraryId", "library")
-                .containsExactlyInAnyOrder("bookId", "dueDate");
+                .containsExactlyInAnyOrder("bookId", "memberId", "dueDate");
 
         assertThat(Arrays.stream(IssueBookRequest.class.getMethods()).map(Method::getName))
                 .doesNotContain("getLibraryId", "setLibraryId");

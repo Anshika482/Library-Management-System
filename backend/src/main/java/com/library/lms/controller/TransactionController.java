@@ -68,6 +68,7 @@ public class TransactionController {
             Authentication authentication) {
         TransactionResponse issuedTransaction = transactionService.issueBook(
                 issueBookRequest.getBookId(),
+                issueBookRequest.getMemberId(),
                 authentication.getName(),
                 issueBookRequest.getDueDate());
 

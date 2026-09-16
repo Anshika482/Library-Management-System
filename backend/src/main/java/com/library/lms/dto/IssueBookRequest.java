@@ -49,6 +49,24 @@ public class IssueBookRequest {
     private Long bookId;
 
     /**
+     * The member the book is being lent to.
+     *
+     * <p>Required, because a loan belongs to whoever is taking the book home,
+     * not to the member of staff handing it over. Before this field existed the
+     * service recorded the caller as the borrower, which meant a librarian
+     * could only ever lend to themselves - so every request naming a book now
+     * has to say who is borrowing it.</p>
+     *
+     * <p>Whether this id may be lent to at all - that it exists, is a member,
+     * is in the same library as the staff member, and is neither disabled nor
+     * locked - is decided by the service against the database. An id alone
+     * proves none of it.</p>
+     */
+    @NotNull(message = "Member id is required")
+    @Positive(message = "Member id must be a positive number")
+    private Long memberId;
+
+    /**
      * When the book must come back.
      *
      * <p>{@code @FutureOrPresent} refuses a date already in the past: a loan
