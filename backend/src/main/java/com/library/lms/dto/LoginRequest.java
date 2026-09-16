@@ -1,6 +1,7 @@
 package com.library.lms.dto;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -35,7 +36,16 @@ public class LoginRequest {
      * unusable as a missing one, and rejecting it here keeps a pointless
      * database lookup from happening at all.</p>
      */
+    /**
+     * Login name.
+     *
+     * <p>The maximum matches the {@code users.username} column exactly, so the
+     * limit can never refuse a username the database could actually hold, while
+     * still capping what an unauthenticated caller can make the server read,
+     * normalise and look up.</p>
+     */
     @NotBlank(message = "Username is required")
+    @Size(max = 255, message = "Username must not exceed 255 characters")
     private String username;
 
     /**
@@ -49,7 +59,19 @@ public class LoginRequest {
      * credential into a log file, where it would be retained, shipped and
      * searched long after the request was served.</p>
      */
+    /**
+     * The submitted password.
+     *
+     * <p>72 bytes is BCrypt's own limit: the algorithm reads no further, so
+     * everything past it is already ignored when the stored hash is compared.
+     * Capping it here means an unauthenticated caller cannot post a megabyte of
+     * password and have the server carry it as far as the encoder.</p>
+     *
+     * <p>The message names the limit and never the value. Neither does the
+     * validation handler, which reports only the text written here.</p>
+     */
     @ToString.Exclude
     @NotBlank(message = "Password is required")
+    @Size(max = 72, message = "Password must not exceed 72 characters")
     private String password;
 }

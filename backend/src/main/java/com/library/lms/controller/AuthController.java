@@ -14,7 +14,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.library.lms.dto.LoginRequest;
+import com.library.lms.exception.TooManyLoginAttemptsException;
 import com.library.lms.service.JwtService;
+import com.library.lms.service.LoginAttemptService;
 
 import jakarta.validation.Valid;
 
@@ -39,9 +41,13 @@ public class AuthController {
 
     private final JwtService jwtService;
 
-    public AuthController(AuthenticationManager authenticationManager, JwtService jwtService) {
+    private final LoginAttemptService loginAttemptService;
+
+    public AuthController(AuthenticationManager authenticationManager, JwtService jwtService,
+            LoginAttemptService loginAttemptService) {
         this.authenticationManager = authenticationManager;
         this.jwtService = jwtService;
+        this.loginAttemptService = loginAttemptService;
     }
 
     /**
@@ -84,6 +90,17 @@ public class AuthController {
      */
     @PostMapping("/login")
     public ResponseEntity<LoginResponse> login(@Valid @RequestBody LoginRequest loginRequest) {
+        String username = loginRequest.getUsername();
+
+        // Before the password is checked, so a blocked caller costs no BCrypt
+        // work. The refusal is an ordinary authentication failure, which the
+        // handler answers with the one fixed 401 - a caller cannot tell being
+        // blocked from guessing wrong.
+        if (loginAttemptService.isBlocked(username)) {
+            log.warn("Login refused by rate limit for username='{}'", forLog(username));
+            throw new TooManyLoginAttemptsException();
+        }
+
         Authentication authentication;
 
         try {
@@ -91,14 +108,23 @@ public class AuthController {
                     new UsernamePasswordAuthenticationToken(
                             loginRequest.getUsername(), loginRequest.getPassword()));
         } catch (AuthenticationException exception) {
+            // Counted whether or not the account exists: counting only real
+            // accounts would make the block itself an oracle for which
+            // usernames are real.
+            loginAttemptService.recordFailure(username);
+
             // Which username was tried, and nothing else. Not the password, and
             // not whether the account exists - the type name says only how
             // Spring Security classified the failure, and the caller is still
             // told the one fixed message by the exception handler.
             log.warn("Login failed for username='{}' ({})",
-                    forLog(loginRequest.getUsername()), exception.getClass().getSimpleName());
+                    forLog(username), exception.getClass().getSimpleName());
             throw exception;
         }
+
+        // Proving the password is the best evidence the earlier failures were
+        // someone mistyping rather than someone guessing.
+        loginAttemptService.reset(username);
 
         UserDetails userDetails = (UserDetails) authentication.getPrincipal();
         log.info("Login succeeded for username='{}'", forLog(userDetails.getUsername()));
