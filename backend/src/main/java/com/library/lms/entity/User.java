@@ -99,6 +99,43 @@ public class User {
     private Role role;
 
     /**
+     * Whether this account may be used at all.
+     *
+     * <p>False is the switch an administrator throws when someone leaves: the
+     * password stays valid and nothing is deleted, but neither a login nor an
+     * already-issued token gets any further.</p>
+     *
+     * <p><b>The default is true in two places, and both matter.</b> The field
+     * initialiser means an account created in Java is usable unless somebody
+     * says otherwise. The {@code DEFAULT TRUE} in the column definition is for
+     * the rows that already exist: this column is added to a populated table,
+     * and without a default every current account would arrive disabled and
+     * nobody could log in.</p>
+     */
+    @Column(nullable = false, columnDefinition = "BOOLEAN NOT NULL DEFAULT TRUE")
+    private boolean enabled = true;
+
+    /**
+     * Whether this account is free of an administrative lock.
+     *
+     * <p>Named for what makes it <i>usable</i> rather than what stops it, which
+     * reads backwards but matches {@code UserDetails.isAccountNonLocked()}
+     * exactly. Keeping the entity's sense identical to Spring Security's means
+     * neither the service that builds a {@code UserDetails} nor anyone reading
+     * the two side by side has to invert it in their head.</p>
+     *
+     * <p>Locked and disabled are kept apart on purpose: one is a temporary
+     * response to something suspicious, the other is a deliberate retirement of
+     * the account. Spring Security answers both the same way, and so does this
+     * API, but the record of which was done survives.</p>
+     *
+     * <p>Defaults to true for the same two reasons as {@link #enabled}.</p>
+     */
+    @Column(name = "account_non_locked", nullable = false,
+            columnDefinition = "BOOLEAN NOT NULL DEFAULT TRUE")
+    private boolean accountNonLocked = true;
+
+    /**
      * The library this account belongs to.
      *
      * <p>This is the tenant boundary. Once every account carries one, a member

@@ -29,4 +29,18 @@ public interface UserRepository extends JpaRepository<User, Long> {
      * @return the matching account, or empty if there is none
      */
     Optional<User> findByUsername(String username);
+
+    /**
+     * Finds one account by id, but only inside the given library.
+     *
+     * <p>The library condition is what keeps an administrator inside their own
+     * tenant. Asking for an id that belongs to another library returns empty,
+     * exactly as an id that belongs to nobody does, so the caller cannot tell
+     * the two apart.</p>
+     *
+     * @param id        the account being looked up
+     * @param libraryId the library the caller belongs to
+     * @return the account, or empty if it is missing or not theirs
+     */
+    Optional<User> findByIdAndLibraryId(Long id, Long libraryId);
 }

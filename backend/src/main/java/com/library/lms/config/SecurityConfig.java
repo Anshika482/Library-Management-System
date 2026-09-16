@@ -180,6 +180,12 @@ public class SecurityConfig {
                         .requestMatchers("/api/transactions/status/**").hasAnyAuthority(ADMIN, LIBRARIAN)
                         .requestMatchers(HttpMethod.GET, "/api/transactions/**").authenticated()
 
+                        // Administrators only, and no HTTP method named: these
+                        // endpoints change who may use the system, so every
+                        // verb on the path is covered rather than the ones
+                        // thought of today.
+                        .requestMatchers("/api/users/**").hasAuthority(ADMIN)
+
                         .anyRequest().authenticated())
                 .exceptionHandling(exceptions -> exceptions
                         .authenticationEntryPoint(restAuthenticationEntryPoint)

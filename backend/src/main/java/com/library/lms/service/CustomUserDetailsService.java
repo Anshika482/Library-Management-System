@@ -93,6 +93,14 @@ public class CustomUserDetailsService implements UserDetailsService {
                 .withUsername(user.getUsername())
                 .password(user.getPassword())
                 .authorities(new SimpleGrantedAuthority(user.getRole().name()))
+                // Both are inverted because the builder asks the opposite
+                // question from the entity. Handing them over is all it takes
+                // for the authentication provider to refuse a disabled or
+                // locked account before it even compares the password - and it
+                // refuses with an AuthenticationException, so the caller is
+                // told the same fixed sentence as a wrong password.
+                .disabled(!user.isEnabled())
+                .accountLocked(!user.isAccountNonLocked())
                 .build();
     }
 }

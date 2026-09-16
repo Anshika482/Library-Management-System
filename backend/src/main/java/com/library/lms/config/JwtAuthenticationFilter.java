@@ -5,9 +5,12 @@ import java.io.IOException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
+import org.springframework.security.authentication.AccountStatusException;
+import org.springframework.security.authentication.AccountStatusUserDetailsChecker;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.core.userdetails.UserDetailsChecker;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
@@ -45,6 +48,18 @@ import jakarta.servlet.http.HttpServletResponse;
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private static final Logger log = LoggerFactory.getLogger(JwtAuthenticationFilter.class);
+
+    /**
+     * Applies the account-status rules to a token holder.
+     *
+     * <p>The login endpoint gets these checks for free - the authentication
+     * provider runs them - but a request carrying a token never goes near that
+     * provider, so without this a disabled account would keep its access until
+     * its token expired. Spring's own checker is used rather than a pair of
+     * hand-written conditions, so the rules cannot drift apart from the ones
+     * applied at login.</p>
+     */
+    private static final UserDetailsChecker ACCOUNT_STATUS = new AccountStatusUserDetailsChecker();
 
     /** The scheme prefix, trailing space included, that a Bearer header must start with. */
     private static final String BEARER_PREFIX = "Bearer ";
@@ -108,12 +123,18 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             String username = jwtService.extractUsername(token);
             UserDetails userDetails = userDetailsService.loadUserByUsername(username);
 
+            // Read from the database on every request, so disabling an account
+            // takes effect at once rather than whenever the token would have
+            // run out. Throws an AccountStatusException, caught below.
+            ACCOUNT_STATUS.check(userDetails);
+
             UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
                     userDetails, null, userDetails.getAuthorities());
             authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
 
             SecurityContextHolder.getContext().setAuthentication(authentication);
-        } catch (JwtException | IllegalArgumentException | UsernameNotFoundException exception) {
+        } catch (JwtException | IllegalArgumentException | UsernameNotFoundException
+                | AccountStatusException exception) {
             SecurityContextHolder.clearContext();
 
             // The type name says why - expired, wrong signature, wrong issuer or
