@@ -380,6 +380,64 @@ public class GlobalExceptionHandler {
      * every reason equally, so this reply cannot be used to discover whether a
      * particular account is staff, disabled or locked.</p>
      */
+    /**
+     * Handles an account that cannot be created under the name or email asked
+     * for.
+     *
+     * <p><b>400 BAD REQUEST</b>, matching how this API already answers a
+     * duplicate ISBN or category. The message is the exception's own fixed
+     * sentence, which names neither which of the two fields clashed nor the
+     * value - both columns are unique across every library, so a specific reply
+     * would describe an account the caller may have no business knowing
+     * about.</p>
+     */
+    @ExceptionHandler(DuplicateAccountException.class)
+    public ResponseEntity<ErrorResponse> handleDuplicateAccount(DuplicateAccountException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.BAD_REQUEST.value(),
+                exception.getMessage(),
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorResponse);
+    }
+
+    /**
+     * Handles an attempt to create an account with a role that cannot be
+     * granted.
+     *
+     * <p><b>400 BAD REQUEST</b>: the request is well formed, the role simply is
+     * not one this endpoint hands out. The message names the roles that are
+     * allowed, which is the part a caller can act on.</p>
+     */
+    @ExceptionHandler(RoleNotAssignableException.class)
+    public ResponseEntity<ErrorResponse> handleRoleNotAssignable(RoleNotAssignableException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.BAD_REQUEST.value(),
+                exception.getMessage(),
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorResponse);
+    }
+
+    /**
+     * Handles a password change where the current password was wrong.
+     *
+     * <p><b>400, not 401.</b> The caller is authenticated and their session is
+     * perfectly valid - answering 401 would suggest logging in again, which
+     * would not help. Saying plainly that the current password was wrong
+     * discloses nothing: the caller has already proved they are this account.</p>
+     */
+    @ExceptionHandler(InvalidCurrentPasswordException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidCurrentPassword(
+            InvalidCurrentPasswordException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.BAD_REQUEST.value(),
+                exception.getMessage(),
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorResponse);
+    }
+
     @ExceptionHandler(MemberNotEligibleException.class)
     public ResponseEntity<ErrorResponse> handleMemberNotEligible(MemberNotEligibleException exception) {
         ErrorResponse errorResponse = new ErrorResponse(

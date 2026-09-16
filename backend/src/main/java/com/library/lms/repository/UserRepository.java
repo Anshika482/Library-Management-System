@@ -43,4 +43,20 @@ public interface UserRepository extends JpaRepository<User, Long> {
      * @return the account, or empty if it is missing or not theirs
      */
     Optional<User> findByIdAndLibraryId(Long id, Long libraryId);
+
+    /**
+     * Whether any account already uses this login name.
+     *
+     * <p>Deliberately unscoped, unlike every other lookup here: the column is
+     * unique across the whole table, not per library, so an account in another
+     * library still takes the name. Scoping this to the caller's library would
+     * let the check pass and the insert then fail on the constraint.</p>
+     *
+     * <p>The collation is case-insensitive, so this also matches a name that
+     * differs only in case - which is exactly what the unique index will do.</p>
+     */
+    boolean existsByUsername(String username);
+
+    /** Whether any account already uses this email. Unscoped for the same reason. */
+    boolean existsByEmail(String email);
 }

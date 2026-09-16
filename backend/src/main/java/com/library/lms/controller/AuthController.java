@@ -13,10 +13,12 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.library.lms.dto.ChangePasswordRequest;
 import com.library.lms.dto.LoginRequest;
 import com.library.lms.exception.TooManyLoginAttemptsException;
 import com.library.lms.service.JwtService;
 import com.library.lms.service.LoginAttemptService;
+import com.library.lms.service.UserService;
 
 import jakarta.validation.Valid;
 
@@ -43,11 +45,42 @@ public class AuthController {
 
     private final LoginAttemptService loginAttemptService;
 
+    private final UserService userService;
+
     public AuthController(AuthenticationManager authenticationManager, JwtService jwtService,
-            LoginAttemptService loginAttemptService) {
+            LoginAttemptService loginAttemptService, UserService userService) {
         this.authenticationManager = authenticationManager;
         this.jwtService = jwtService;
         this.loginAttemptService = loginAttemptService;
+        this.userService = userService;
+    }
+
+    /**
+     * Changes the password of whoever is making the request.
+     *
+     * <p><b>It lives here rather than under {@code /api/users} because everyone
+     * needs it.</b> That path requires ADMIN for every method, so a member or a
+     * librarian could never reach their own password there. Only
+     * {@code POST /api/auth/login} is open to anonymous callers, so this route
+     * falls to the chain's catch-all and requires authentication - which is
+     * exactly right for a self-service credential change.</p>
+     *
+     * <p>Whose password changes is taken from {@link Authentication}, never from
+     * the body, so this cannot be pointed at another account.</p>
+     *
+     * <p><b>204 with no body.</b> There is nothing useful to return, and a body
+     * would only be somewhere for a credential to leak into.</p>
+     *
+     * @param request        the current password and the replacement
+     * @param authentication the account changing its own password
+     * @return 204 once the change is stored
+     */
+    @PostMapping("/password")
+    public ResponseEntity<Void> changePassword(@Valid @RequestBody ChangePasswordRequest request,
+            Authentication authentication) {
+        userService.changePassword(request, authentication.getName());
+
+        return ResponseEntity.noContent().build();
     }
 
     /**
