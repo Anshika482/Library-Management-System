@@ -38,6 +38,14 @@
 
         <!-- One version for all three JJWT artifacts; they must always match. -->
         <jjwt.version>0.13.0</jjwt.version>
+
+        <!--
+            The library's business time zone. Due dates, overdue status and
+            fines follow the JVM's date, so the JVM is started in this zone for
+            the tests and for spring-boot:run rather than inheriting the
+            machine's. Keep it equal to APP_TIME_ZONE.
+        -->
+        <app.time-zone>Asia/Kolkata</app.time-zone>
     </properties>
 
     <dependencies>
@@ -267,6 +275,8 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
+                    <!-- Tests run in the business time zone, whatever the machine's is. -->
+                    <argLine>-Duser.timezone=${app.time-zone}</argLine>
                     <environmentVariables>
                         <JWT_SECRET>test-only-jwt-signing-secret-not-used-by-any-environment</JWT_SECRET>
                         <JWT_ISSUER>test-only-jwt-issuer</JWT_ISSUER>
@@ -282,6 +292,7 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <configuration>
+                    <jvmArguments>-Duser.timezone=${app.time-zone}</jvmArguments>
                     <excludes>
                         <!-- Lombok disappears after compilation; keep it out of the jar. -->
                         <exclude>
