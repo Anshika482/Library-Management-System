@@ -222,7 +222,8 @@ class BookServiceDetachedCategoryMappingTest {
         // The suffix appears in every title this run created and nowhere else.
         String keyword = shelf.books().get(0).getTitle().split(" ")[2];
 
-        List<BookResponse> results = bookService.searchBooks(keyword, shelf.librarian());
+        List<BookResponse> results =
+                bookService.searchBooks(keyword, 0, 10, "id", "asc", shelf.librarian()).getContent();
 
         assertThat(results).hasSize(2);
         assertFullyMapped(results.get(0), shelf, shelf.books().get(0));
@@ -237,7 +238,7 @@ class BookServiceDetachedCategoryMappingTest {
         Shelf shelf = persistShelf(2);
 
         List<BookResponse> results = bookService.getBooksByCategory(
-                shelf.categoryName(), shelf.librarian());
+                shelf.categoryName(), 0, 10, "id", "asc", shelf.librarian()).getContent();
 
         assertThat(results).hasSize(2);
         assertFullyMapped(results.get(0), shelf, shelf.books().get(0));

@@ -179,19 +179,8 @@ public class BookService {
         validatePagination(page, size);
 
         Pageable pageable = PageRequest.of(page, size, resolveSort(sortBy, direction));
-        Page<Book> bookPage = bookRepository.findAll(buildFilter(keyword, categoryId, libraryId), pageable);
 
-        List<BookResponse> content = bookPage.getContent()
-                .stream()
-                .map(this::toResponse)
-                .toList();
-
-        return new PagedResponse<>(
-                content,
-                bookPage.getNumber(),
-                bookPage.getSize(),
-                bookPage.getTotalElements(),
-                bookPage.getTotalPages());
+        return toPagedResponse(bookRepository.findAll(buildFilter(keyword, categoryId, libraryId), pageable));
     }
 
     /**
@@ -204,48 +193,53 @@ public class BookService {
     }
 
     /**
-     * Finds books whose title, author or ISBN contains the given text.
+     * Finds books whose title, author or ISBN contains the given text, one page
+     * at a time.
      *
-     * <p>One search box, three columns. The same keyword is handed to the
-     * repository three times because each part of the query needs its own
-     * value; doing that here keeps the awkward method name out of the
-     * controller.</p>
+     * <p>This is the paged book list with a keyword, and it is implemented as
+     * exactly that: the same library filter, the same keyword matching, the same
+     * page limits and the same sortable fields as {@link #getAllBooks}. Sharing
+     * the one path is what stops the two from drifting apart.</p>
      *
      * <p>The search is partial and case-insensitive, so "java" finds
-     * "Effective Java". No match is not an error - the result is simply an
-     * empty list.</p>
+     * "Effective Java". A blank or whitespace-only keyword applies no filter, as
+     * it always has - but the answer is now a bounded page of the caller's own
+     * library rather than every book in it at once. No match is not an error:
+     * the page is simply empty.</p>
+     *
+     * @throws InvalidPaginationException if page or size is out of range
+     * @throws InvalidSortException       if the field or direction is unsupported
      */
-    public List<BookResponse> searchBooks(String keyword, String authenticatedUsername) {
-        Specification<Book> specification =
-                BookSpecifications.belongsToLibrary(libraryIdOf(authenticatedUsername));
-
-        if (hasKeyword(keyword)) {
-            specification = specification.and(BookSpecifications.matchesKeyword(keyword.trim()));
-        }
-
-        return bookRepository.findAll(specification)
-                .stream()
-                .map(this::toResponse)
-                .toList();
+    public PagedResponse<BookResponse> searchBooks(String keyword, int page, int size, String sortBy,
+                                                   String direction, String authenticatedUsername) {
+        return getAllBooks(page, size, sortBy, direction, keyword, null, authenticatedUsername);
     }
 
     /**
-     * Returns every book shelved under one category.
+     * Returns one page of the books shelved under one category name.
      *
-     * <p>Uses {@code findByCategory}, the repository method declared back when
-     * the interface was written. Unlike the search above this is an exact
-     * match, which is what a category filter should be: "Programming" is a
-     * shelf label, not a phrase to search within.</p>
+     * <p>Unlike the search above this is an exact match, which is what a
+     * category filter should be: "Programming" is a shelf label, not a phrase to
+     * search within. The name is only ever matched inside the caller's
+     * library.</p>
      *
-     * <p>An unknown category yields an empty list rather than a 404 - asking
-     * for a shelf that happens to hold nothing is a valid question with a valid
-     * answer.</p>
+     * <p>An unknown category yields an empty page rather than a 404 - asking for
+     * a shelf that happens to hold nothing is a valid question with a valid
+     * answer. Page limits and sortable fields are those of
+     * {@link #getAllBooks}.</p>
+     *
+     * @throws InvalidPaginationException if page or size is out of range
+     * @throws InvalidSortException       if the field or direction is unsupported
      */
-    public List<BookResponse> getBooksByCategory(String category, String authenticatedUsername) {
-        return bookRepository.findByLibraryIdAndCategoryName(libraryIdOf(authenticatedUsername), category)
-                .stream()
-                .map(this::toResponse)
-                .toList();
+    public PagedResponse<BookResponse> getBooksByCategory(String category, int page, int size, String sortBy,
+                                                          String direction, String authenticatedUsername) {
+        Long libraryId = libraryIdOf(authenticatedUsername);
+
+        validatePagination(page, size);
+
+        Pageable pageable = PageRequest.of(page, size, resolveSort(sortBy, direction));
+
+        return toPagedResponse(bookRepository.findByLibraryIdAndCategoryName(libraryId, category, pageable));
     }
 
     /**
@@ -390,6 +384,21 @@ public class BookService {
         }
 
         return specification;
+    }
+
+    /** Maps one page of books into the response every paged book endpoint returns. */
+    private PagedResponse<BookResponse> toPagedResponse(Page<Book> books) {
+        List<BookResponse> content = books.getContent()
+                .stream()
+                .map(this::toResponse)
+                .toList();
+
+        return new PagedResponse<>(
+                content,
+                books.getNumber(),
+                books.getSize(),
+                books.getTotalElements(),
+                books.getTotalPages());
     }
 
     /** A keyword only counts if it holds something other than whitespace. */

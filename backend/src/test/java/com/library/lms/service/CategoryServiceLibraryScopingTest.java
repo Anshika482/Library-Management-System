@@ -20,9 +20,13 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
 
 import com.library.lms.dto.CategoryRequest;
 import com.library.lms.dto.CategoryResponse;
+import com.library.lms.dto.PagedResponse;
 import com.library.lms.entity.Category;
 import com.library.lms.entity.Library;
 import com.library.lms.entity.Role;
@@ -106,15 +110,15 @@ class CategoryServiceLibraryScopingTest {
     @Test
     void listReturnsOnlyTheCallersOwnLibraryCategories() {
         callerIsInOwnLibrary();
-        when(categoryRepository.findByLibraryIdOrderByIdAsc(OWN_LIBRARY_ID))
-                .thenReturn(List.of(category(1L, "Fiction", OWN_LIBRARY_ID),
-                        category(2L, "History", OWN_LIBRARY_ID)));
+        when(categoryRepository.findByLibraryId(eq(OWN_LIBRARY_ID), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(category(1L, "Fiction", OWN_LIBRARY_ID),
+                        category(2L, "History", OWN_LIBRARY_ID))));
 
-        List<CategoryResponse> categories = categoryService.getAllCategories(CALLER);
+        PagedResponse<CategoryResponse> categories = categoryService.getAllCategories(0, 10, "id", "asc", CALLER);
 
-        assertThat(categories).extracting(CategoryResponse::getName)
+        assertThat(categories.getContent()).extracting(CategoryResponse::getName)
                 .containsExactly("Fiction", "History");
-        verify(categoryRepository).findByLibraryIdOrderByIdAsc(OWN_LIBRARY_ID);
+        verify(categoryRepository).findByLibraryId(eq(OWN_LIBRARY_ID), any(Pageable.class));
     }
 
     @Test
@@ -122,12 +126,13 @@ class CategoryServiceLibraryScopingTest {
         // The tenant filter must be in the query. Loading all rows and
         // discarding other libraries' would still have read them.
         callerIsInOwnLibrary();
-        when(categoryRepository.findByLibraryIdOrderByIdAsc(OWN_LIBRARY_ID)).thenReturn(List.of());
+        when(categoryRepository.findByLibraryId(eq(OWN_LIBRARY_ID), any(Pageable.class))).thenReturn(Page.empty());
 
-        categoryService.getAllCategories(CALLER);
+        categoryService.getAllCategories(0, 10, "id", "asc", CALLER);
 
         verify(categoryRepository, never()).findAll();
         verify(categoryRepository, never()).findAll(any(org.springframework.data.domain.Sort.class));
+        verify(categoryRepository, never()).findAll(any(Pageable.class));
     }
 
     // ---------- update ----------
@@ -265,10 +270,10 @@ class CategoryServiceLibraryScopingTest {
     void anUnresolvableAuthenticatedNameNeverReachesTheCategoryTable() {
         when(userRepository.findByUsername("ghost")).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> categoryService.getAllCategories("ghost"))
+        assertThatThrownBy(() -> categoryService.getAllCategories(0, 10, "id", "asc", "ghost"))
                 .isInstanceOf(com.library.lms.exception.UserNotFoundException.class);
 
-        verify(categoryRepository, never()).findByLibraryIdOrderByIdAsc(anyLong());
+        verify(categoryRepository, never()).findByLibraryId(anyLong(), any(Pageable.class));
     }
 
     // ---------- library-scoped name uniqueness ----------

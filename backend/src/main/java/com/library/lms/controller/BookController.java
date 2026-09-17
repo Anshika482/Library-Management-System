@@ -1,7 +1,5 @@
 package com.library.lms.controller;
 
-import java.util.List;
-
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -145,13 +143,25 @@ public class BookController {
      * {@code /api/books/{id}} - Spring always prefers an exact path segment
      * over a variable one.</p>
      *
-     * <p>Always 200 OK, with an empty array when nothing matches. "No results"
-     * is a successful search, not a 404.</p>
+     * <p>Paged exactly like {@code GET /api/books}: {@code page}, {@code size},
+     * {@code sortBy} and {@code direction} take the same defaults and the same
+     * limits, and the answer is the same paged object rather than a bare array,
+     * so no search can return a whole library at once. A blank keyword applies
+     * no filter, as it always did, and is bounded by the page like any other.</p>
+     *
+     * <p>Always 200 OK, with empty {@code content} when nothing matches. "No
+     * results" is a successful search, not a 404.</p>
      */
     @GetMapping("/search")
-    public ResponseEntity<List<BookResponse>> searchBooks(@RequestParam String keyword,
-                                                         Authentication authentication) {
-        List<BookResponse> books = bookService.searchBooks(keyword, authentication.getName());
+    public ResponseEntity<PagedResponse<BookResponse>> searchBooks(
+            @RequestParam String keyword,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(defaultValue = "id") String sortBy,
+            @RequestParam(defaultValue = "asc") String direction,
+            Authentication authentication) {
+        PagedResponse<BookResponse> books =
+                bookService.searchBooks(keyword, page, size, sortBy, direction, authentication.getName());
         return ResponseEntity.ok(books);
     }
 
@@ -162,12 +172,20 @@ public class BookController {
      * the way an id identifies one book. Two segments deep, so there is no
      * ambiguity with {@code /api/books/{id}} either.</p>
      *
-     * <p>Also always 200 OK with a possibly empty array.</p>
+     * <p>Paged like {@code GET /api/books}, with the same parameters, defaults
+     * and limits, and matched only within the caller's library. Always 200 OK,
+     * with empty {@code content} for a shelf that holds nothing.</p>
      */
     @GetMapping("/category/{category}")
-    public ResponseEntity<List<BookResponse>> getBooksByCategory(@PathVariable String category,
-                                                                 Authentication authentication) {
-        List<BookResponse> books = bookService.getBooksByCategory(category, authentication.getName());
+    public ResponseEntity<PagedResponse<BookResponse>> getBooksByCategory(
+            @PathVariable String category,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(defaultValue = "id") String sortBy,
+            @RequestParam(defaultValue = "asc") String direction,
+            Authentication authentication) {
+        PagedResponse<BookResponse> books =
+                bookService.getBooksByCategory(category, page, size, sortBy, direction, authentication.getName());
         return ResponseEntity.ok(books);
     }
 

@@ -1,8 +1,9 @@
 package com.library.lms.repository;
 
-import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
@@ -11,10 +12,9 @@ import com.library.lms.entity.Category;
 /**
  * Data-access layer for {@link Category}.
  *
- * <p>Almost everything needed is inherited from {@code JpaRepository}:
- * {@code findById} turns a {@code categoryId} into a Category, and
- * {@code findAll(Sort)} backs the list endpoint. Only the duplicate check below
- * needs declaring.</p>
+ * <p>{@code JpaRepository} supplies the basics. Every query declared below is
+ * scoped to one library, because every caller of this repository acts inside a
+ * single tenant.</p>
  */
 @Repository
 public interface CategoryRepository extends JpaRepository<Category, Long> {
@@ -36,20 +36,21 @@ public interface CategoryRepository extends JpaRepository<Category, Long> {
      * name is taken.</p>
      */
     /**
-     * Every category owned by one library, oldest first.
+     * One page of the categories owned by one library.
      *
      * <p>The tenant filter is part of the query, not something applied to the
      * results afterwards. Fetching all rows and discarding the ones that belong
      * to other libraries would read data the caller may not see and would get
      * slower with every library added.</p>
      *
-     * <p>{@code OrderByIdAsc} keeps the ordering the listing endpoint already
-     * had, which the previous {@code findAll(Sort.by(ASC, "id"))} supplied.</p>
+     * <p>The order comes from the {@link Pageable}, which the service builds from
+     * an allowlist of fields, so the database sorts and limits in one query.</p>
      *
      * @param libraryId the owning library
-     * @return that library's categories, ordered by id
+     * @param pageable  which page, how large, and in what order
+     * @return one page of that library's categories
      */
-    List<Category> findByLibraryIdOrderByIdAsc(Long libraryId);
+    Page<Category> findByLibraryId(Long libraryId, Pageable pageable);
 
     /**
      * One category, but only if it belongs to this library.

@@ -1,7 +1,5 @@
 package com.library.lms.controller;
 
-import java.util.List;
-
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -12,10 +10,12 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.library.lms.dto.CategoryRequest;
 import com.library.lms.dto.CategoryResponse;
+import com.library.lms.dto.PagedResponse;
 import com.library.lms.service.CategoryService;
 
 import jakarta.validation.Valid;
@@ -43,14 +43,24 @@ public class CategoryController {
     }
 
     /**
-     * GET /api/categories - lists every category, ordered by id.
+     * GET /api/categories - one page of the caller's library's categories.
+     *
+     * <p>Paged like the book list: {@code page} from 0, {@code size} from 1 to
+     * 50, ordered by {@code id} or {@code name} in either direction, and by
+     * default the first ten by id ascending - the order this list always had.</p>
      *
      * <p>Always 200 OK. An empty library of categories is a normal state, not
-     * an error, so it answers with an empty array rather than a 404.</p>
+     * an error, so it answers with an empty page rather than a 404.</p>
      */
     @GetMapping
-    public ResponseEntity<List<CategoryResponse>> getAllCategories(Authentication authentication) {
-        List<CategoryResponse> categories = categoryService.getAllCategories(authentication.getName());
+    public ResponseEntity<PagedResponse<CategoryResponse>> getAllCategories(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(defaultValue = "id") String sortBy,
+            @RequestParam(defaultValue = "asc") String direction,
+            Authentication authentication) {
+        PagedResponse<CategoryResponse> categories =
+                categoryService.getAllCategories(page, size, sortBy, direction, authentication.getName());
         return ResponseEntity.ok(categories);
     }
 

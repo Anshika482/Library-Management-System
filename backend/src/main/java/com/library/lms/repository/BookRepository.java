@@ -1,6 +1,5 @@
 package com.library.lms.repository;
 
-import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.domain.Page;
@@ -61,17 +60,6 @@ public interface BookRepository extends JpaRepository<Book, Long>, JpaSpecificat
     Page<Book> findAll(Specification<Book> specification, Pageable pageable);
 
     /**
-     * Every book matching a filter, with each book's category loaded.
-     *
-     * <p>The unpaged sibling of the method above, redeclared for the same
-     * reason and carrying the same graph. No count query is involved here, so
-     * this is the simpler of the two.</p>
-     */
-    @Override
-    @EntityGraph(attributePaths = "category")
-    List<Book> findAll(Specification<Book> specification);
-
-    /**
      * One book, but only if it belongs to this library.
      *
      * <p>Scoping the lookup rather than loading the row and checking afterwards
@@ -88,19 +76,24 @@ public interface BookRepository extends JpaRepository<Book, Long>, JpaSpecificat
     Optional<Book> findByIdAndLibraryId(Long id, Long libraryId);
 
     /**
-     * Every book on one library's shelves, matched by category name.
+     * One page of one library's books, matched by category name.
      *
      * <p>The library comes first in the method name and in the query, so the
      * category name is only ever matched within the caller's own tenant. Without
      * it, two libraries that both have a "Fiction" shelf would see each other's
      * stock.</p>
      *
+     * <p>Paged, so a shelf holding thousands of books is still read one page at
+     * a time. As with the paged {@code findAll} above, the graph applies to the
+     * data query only, so the count behind the totals stays a plain count.</p>
+     *
      * @param libraryId the caller's library
      * @param name      the category name to match
-     * @return that library's books in that category
+     * @param pageable  which page, how large, and in what order
+     * @return one page of that library's books in that category
      */
     @EntityGraph(attributePaths = "category")
-    List<Book> findByLibraryIdAndCategoryName(Long libraryId, String name);
+    Page<Book> findByLibraryIdAndCategoryName(Long libraryId, String name, Pageable pageable);
 
     /**
      * One book by ISBN within a library.

@@ -27,6 +27,7 @@ import org.springframework.data.jpa.domain.Specification;
 
 import com.library.lms.dto.BookRequest;
 import com.library.lms.dto.BookResponse;
+import com.library.lms.dto.PagedResponse;
 import com.library.lms.entity.Book;
 import com.library.lms.entity.Category;
 import com.library.lms.entity.Library;
@@ -175,28 +176,30 @@ class BookServiceLibraryScopingTest {
     }
 
     @Test
-    void searchAppliesTheLibraryPredicate() {
+    void searchAppliesTheLibraryPredicateToAPagedQuery() {
         callerIsInOwnLibrary();
-        when(bookRepository.findAll(any(Specification.class)))
-                .thenReturn(List.of(book(1L, "Owned", OWN_LIBRARY_ID)));
+        when(bookRepository.findAll(any(Specification.class), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(book(1L, "Owned", OWN_LIBRARY_ID))));
 
-        List<BookResponse> results = bookService.searchBooks("owned", CALLER);
+        PagedResponse<BookResponse> results = bookService.searchBooks("owned", 0, 10, "id", "asc", CALLER);
 
-        assertThat(results).hasSize(1);
-        verify(bookRepository).findAll(any(Specification.class));
+        assertThat(results.getContent()).hasSize(1);
+        verify(bookRepository).findAll(any(Specification.class), any(Pageable.class));
+        // Neither the unscoped nor the unpaged overload may be reached.
         verify(bookRepository, never()).findAll();
+        verify(bookRepository, never()).findAll(any(Specification.class));
     }
 
     @Test
     void categoryListingIsScopedToTheCallersLibrary() {
         callerIsInOwnLibrary();
-        when(bookRepository.findByLibraryIdAndCategoryName(OWN_LIBRARY_ID, "Fiction"))
-                .thenReturn(List.of(book(1L, "Owned", OWN_LIBRARY_ID)));
+        when(bookRepository.findByLibraryIdAndCategoryName(eq(OWN_LIBRARY_ID), eq("Fiction"), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(book(1L, "Owned", OWN_LIBRARY_ID))));
 
-        List<BookResponse> results = bookService.getBooksByCategory("Fiction", CALLER);
+        PagedResponse<BookResponse> results = bookService.getBooksByCategory("Fiction", 0, 10, "id", "asc", CALLER);
 
-        assertThat(results).hasSize(1);
-        verify(bookRepository).findByLibraryIdAndCategoryName(OWN_LIBRARY_ID, "Fiction");
+        assertThat(results.getContent()).hasSize(1);
+        verify(bookRepository).findByLibraryIdAndCategoryName(eq(OWN_LIBRARY_ID), eq("Fiction"), any(Pageable.class));
     }
 
     @Test

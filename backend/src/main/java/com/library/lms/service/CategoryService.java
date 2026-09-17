@@ -1,18 +1,27 @@
 package com.library.lms.service;
 
 import java.util.List;
+import java.util.Map;
+import java.util.TreeSet;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.library.lms.dto.CategoryRequest;
 import com.library.lms.dto.CategoryResponse;
+import com.library.lms.dto.PagedResponse;
 import com.library.lms.entity.Category;
 import com.library.lms.entity.Library;
 import com.library.lms.entity.User;
 import com.library.lms.exception.CategoryInUseException;
 import com.library.lms.exception.CategoryNotFoundException;
 import com.library.lms.exception.DuplicateCategoryException;
+import com.library.lms.exception.InvalidPaginationException;
+import com.library.lms.exception.InvalidSortException;
 import com.library.lms.exception.UserNotFoundException;
 import com.library.lms.repository.BookRepository;
 import com.library.lms.repository.CategoryRepository;
@@ -31,6 +40,22 @@ import com.library.lms.repository.UserRepository;
  */
 @Service
 public class CategoryService {
+
+    /**
+     * The largest page a client may ask for - the ceiling the book and
+     * transaction lists already apply, for the same reason: without one, a
+     * single request could read a library's whole table.
+     */
+    private static final int MAX_PAGE_SIZE = 50;
+
+    /**
+     * The only fields a client may sort by, mapped to the property used in the
+     * query. As in {@code BookService}, the property handed to {@code Sort.by}
+     * comes from the right-hand side of this map, never from the request.
+     */
+    private static final Map<String, String> SORTABLE_FIELDS = Map.of(
+            "id", "id",
+            "name", "name");
 
     /**
      * Constructor injection, the same pattern BookService uses: the field is
@@ -56,24 +81,43 @@ public class CategoryService {
     }
 
     /**
-     * Returns every category, lowest id first.
+     * Returns one page of the caller's library's categories.
      *
-     * <p>The sort is deliberate. {@code findAll()} with no ordering leaves the
-     * order to the database, which is free to return rows however it likes -
-     * fine in practice today, but not something a client should rely on.
-     * Passing {@code Sort} makes the ordering part of the contract, and it uses
-     * the {@code findAll(Sort)} that JpaRepository already provides, so
-     * CategoryRepository needs no new method.</p>
+     * <p>The tenant filter, the order and the page are all part of the one
+     * query, so the database never reads more than a page of one library's
+     * rows. Left unspecified the order is id ascending, as this list always
+     * was; {@code name} is the other field a client may sort by.</p>
      *
-     * <p>An empty table gives an empty list, never null.</p>
+     * <p>A page past the end is not an error - it is empty and carries the real
+     * totals. A library with no categories gives an empty page, never null.</p>
+     *
+     * @param page      zero-based page number
+     * @param size      categories per page, at most {@value #MAX_PAGE_SIZE}
+     * @param sortBy    "id" or "name"
+     * @param direction "asc" or "desc", case-insensitive
+     * @throws InvalidPaginationException if page or size is out of range
+     * @throws InvalidSortException       if the field or direction is unsupported
      */
-    public List<CategoryResponse> getAllCategories(String authenticatedUsername) {
+    public PagedResponse<CategoryResponse> getAllCategories(int page, int size, String sortBy, String direction,
+                                                            String authenticatedUsername) {
         Long libraryId = authenticatedUser(authenticatedUsername).getLibrary().getId();
 
-        return categoryRepository.findByLibraryIdOrderByIdAsc(libraryId)
+        validatePagination(page, size);
+
+        Pageable pageable = PageRequest.of(page, size, resolveSort(sortBy, direction));
+        Page<Category> categories = categoryRepository.findByLibraryId(libraryId, pageable);
+
+        List<CategoryResponse> content = categories.getContent()
                 .stream()
                 .map(this::toResponse)
                 .toList();
+
+        return new PagedResponse<>(
+                content,
+                categories.getNumber(),
+                categories.getSize(),
+                categories.getTotalElements(),
+                categories.getTotalPages());
     }
 
     /**
@@ -244,6 +288,59 @@ public class CategoryService {
     private User authenticatedUser(String authenticatedUsername) {
         return userRepository.findByUsername(authenticatedUsername)
                 .orElseThrow(() -> new UserNotFoundException(authenticatedUsername));
+    }
+
+    /**
+     * Rejects page and size values that cannot be honoured, with the same
+     * messages the book and transaction lists use.
+     *
+     * <p>Checked here rather than left to {@code PageRequest.of}, which throws a
+     * raw {@link IllegalArgumentException} for a negative page - a 500 that tells
+     * the caller nothing.</p>
+     */
+    private void validatePagination(int page, int size) {
+        if (page < 0) {
+            throw new InvalidPaginationException("Page must be 0 or greater, but was " + page);
+        }
+        if (size < 1) {
+            throw new InvalidPaginationException("Size must be at least 1, but was " + size);
+        }
+        if (size > MAX_PAGE_SIZE) {
+            throw new InvalidPaginationException(
+                    "Size must not exceed " + MAX_PAGE_SIZE + ", but was " + size);
+        }
+    }
+
+    /**
+     * Turns the requested field and direction into a safe {@link Sort}.
+     *
+     * <p>The field is looked up in {@link #SORTABLE_FIELDS} rather than trusted,
+     * and a rejected value is not repeated back. Direction is compared
+     * case-insensitively rather than through {@code Sort.Direction.fromString},
+     * whose raw exception would surface as a 500. Id ascending is appended as a
+     * tie-breaker to any other order, so every page boundary is
+     * deterministic.</p>
+     */
+    private Sort resolveSort(String sortBy, String direction) {
+        String property = SORTABLE_FIELDS.get(sortBy);
+        if (property == null) {
+            throw new InvalidSortException("Unsupported sort field. Allowed fields are: "
+                    + String.join(", ", new TreeSet<>(SORTABLE_FIELDS.keySet())));
+        }
+
+        Sort.Direction sortDirection;
+        if ("asc".equalsIgnoreCase(direction)) {
+            sortDirection = Sort.Direction.ASC;
+        } else if ("desc".equalsIgnoreCase(direction)) {
+            sortDirection = Sort.Direction.DESC;
+        } else {
+            throw new InvalidSortException(
+                    "Unsupported sort direction. Allowed directions are: asc, desc");
+        }
+
+        Sort sort = Sort.by(sortDirection, property);
+
+        return "id".equals(property) ? sort : sort.and(Sort.by(Sort.Direction.ASC, "id"));
     }
 
     private CategoryResponse toResponse(Category category) {
