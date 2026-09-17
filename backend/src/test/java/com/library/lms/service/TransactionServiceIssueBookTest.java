@@ -19,6 +19,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.library.lms.dto.IssueBookRequest;
@@ -85,6 +86,10 @@ class TransactionServiceIssueBookTest {
 
     @Mock
     private UserRepository userRepository;
+
+    /** The real overdue rules at 1.00 a day, on the system clock the fixtures' dates are built from. */
+    @Spy
+    private OverduePolicy overduePolicy = new OverduePolicy("1.00");
 
     @InjectMocks
     private TransactionService transactionService;

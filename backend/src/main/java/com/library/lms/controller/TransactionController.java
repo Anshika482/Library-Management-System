@@ -25,8 +25,9 @@ import jakarta.validation.constraints.Positive;
 /**
  * REST endpoints for borrowing and returning books.
  *
- * <p>Issuing, returning and read-only lookups are exposed. Fines and overdue
- * detection come later.</p>
+ * <p>Issuing, returning and read-only lookups are exposed. Every loan these
+ * endpoints return carries its overdue status and fine; the rules for both are
+ * in {@link TransactionService}.</p>
  *
  * <p>Structured exactly like {@link BookController}: a shared
  * {@code @RequestMapping} prefix, constructor injection of the service, and
@@ -91,11 +92,11 @@ public class TransactionController {
      *
      * <p>Answers <b>200 OK</b>, not 201: nothing new was created, an existing
      * loan was updated. The body is the same {@link TransactionResponse} the
-     * issue endpoint returns, now carrying a return date and a RETURNED
-     * status.</p>
+     * issue endpoint returns, now carrying a return date, a RETURNED status and
+     * the fine fixed at return - zero when the book is back on time.</p>
      *
      * <p>Failures are handled centrally: an unknown transaction gives 404, and
-     * one that is not in the ISSUED state - already returned, most often -
+     * one that is no longer open - already returned -
      * gives <b>409 CONFLICT</b>, because the request is valid and the record
      * exists but the current state will not allow the change.</p>
      *
@@ -195,6 +196,10 @@ public class TransactionController {
      * conversion, before the service or a query is reached; that failure is
      * turned into a clean 400 by the type-mismatch handler rather than a
      * stack trace.</p>
+     *
+     * <p>ISSUED and OVERDUE are decided by the due date, not by what is stored:
+     * OVERDUE is every open loan past its due date, each with its fine so far,
+     * and ISSUED every open loan that is not.</p>
      *
      * <p>The single-segment {@code /{transactionId}} mapping above is not
      * ambiguous with this one - the paths differ in length, and Spring prefers

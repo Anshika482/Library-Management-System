@@ -9,9 +9,11 @@ package com.library.lms.entity;
  * <i>name</i> rather than its position - see the {@code @Enumerated(STRING)}
  * there.</p>
  *
- * <p>Modelling the lifecycle as an explicit state, rather than working it out
- * from the dates each time, means a query can ask "what is overdue?" with a
- * simple equality check instead of date arithmetic on every row.</p>
+ * <p>ISSUED and RETURNED are what the application stores. OVERDUE is decided
+ * rather than stored: an open loan is reported OVERDUE from the day after its
+ * due date, because a status written once would be wrong from the next
+ * midnight until something rewrote it. A row that is stored as OVERDUE is
+ * still treated as an open loan.</p>
  */
 public enum TransactionStatus {
 
@@ -21,6 +23,6 @@ public enum TransactionStatus {
     /** The book has been brought back; {@code returnDate} will be set. */
     RETURNED,
 
-    /** Still out, and past its due date. */
+    /** Still out, and past its due date - reported from the dates, not written. */
     OVERDUE
 }

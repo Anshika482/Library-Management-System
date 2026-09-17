@@ -21,6 +21,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
@@ -90,6 +91,10 @@ class TransactionServiceLibraryScopingTest {
 
     @Mock
     private UserRepository userRepository;
+
+    /** The real overdue rules at 1.00 a day, on the system clock the fixtures' dates are built from. */
+    @Spy
+    private OverduePolicy overduePolicy = new OverduePolicy("1.00");
 
     @InjectMocks
     private TransactionService transactionService;
@@ -446,8 +451,8 @@ class TransactionServiceLibraryScopingTest {
 
         // The repository is asked only for A, so B's loan is never a candidate.
         // Paging changed the shape of the answer, not who may appear in it.
-        when(transactionRepository.findByStatusAndLibraryId(
-                eq(TransactionStatus.ISSUED), eq(LIBRARY_A_ID), any(Pageable.class)))
+        when(transactionRepository.findByStatusInAndDueDateGreaterThanEqualAndLibraryId(
+                eq(OverduePolicy.OPEN_STATUSES), any(LocalDate.class), eq(LIBRARY_A_ID), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(
                         List.of(loan(TRANSACTION_A_ID, LIBRARY_A, bookA, memberOfA("member-of-a")))));
 
@@ -459,8 +464,8 @@ class TransactionServiceLibraryScopingTest {
         assertThat(issued.getContent())
                 .extracting(TransactionResponse::getId).doesNotContain(TRANSACTION_B_ID);
 
-        verify(transactionRepository).findByStatusAndLibraryId(
-                eq(TransactionStatus.ISSUED), eq(LIBRARY_A_ID), any(Pageable.class));
+        verify(transactionRepository).findByStatusInAndDueDateGreaterThanEqualAndLibraryId(
+                eq(OverduePolicy.OPEN_STATUSES), any(LocalDate.class), eq(LIBRARY_A_ID), any(Pageable.class));
     }
 
     // ---------- 10. no global transaction queries survive ----------

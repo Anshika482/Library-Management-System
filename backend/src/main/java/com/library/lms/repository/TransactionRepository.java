@@ -1,5 +1,7 @@
 package com.library.lms.repository;
 
+import java.time.LocalDate;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -120,6 +122,42 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
      */
     Page<Transaction> findByStatusAndLibraryId(TransactionStatus status, Long libraryId,
                                                Pageable pageable);
+
+    /**
+     * One library's open loans whose due date has passed.
+     *
+     * <p>Overdue is not a stored state: a loan becomes overdue the day after its
+     * due date without anything being written, so it is asked of the dates.
+     * {@code statuses} names the states that mean a loan is still open, and
+     * {@code date} is today, from the same clock the loans are then reported
+     * by. Scoped by library like every query here, and paged like the other
+     * lists.</p>
+     *
+     * @param statuses  the states in which a loan is still open
+     * @param date      today; loans due strictly before it are overdue
+     * @param libraryId the caller's library
+     * @param pageable  which slice to return, and in what order
+     * @return one page of that library's overdue loans
+     */
+    Page<Transaction> findByStatusInAndDueDateBeforeAndLibraryId(Collection<TransactionStatus> statuses,
+                                                                  LocalDate date, Long libraryId,
+                                                                  Pageable pageable);
+
+    /**
+     * One library's open loans that are not past their due date.
+     *
+     * <p>The other half of the query above: a loan due today is not yet overdue.
+     * Together the two return every open loan exactly once.</p>
+     *
+     * @param statuses  the states in which a loan is still open
+     * @param date      today; loans due on or after it are not overdue
+     * @param libraryId the caller's library
+     * @param pageable  which slice to return, and in what order
+     * @return one page of that library's open loans that are not overdue
+     */
+    Page<Transaction> findByStatusInAndDueDateGreaterThanEqualAndLibraryId(Collection<TransactionStatus> statuses,
+                                                                            LocalDate date, Long libraryId,
+                                                                            Pageable pageable);
 
     /**
      * Reports whether this library has ever recorded a loan against this book.

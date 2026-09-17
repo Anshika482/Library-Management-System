@@ -16,6 +16,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.library.lms.dto.TransactionResponse;
@@ -47,10 +48,10 @@ import com.library.lms.repository.UserRepository;
  *       changes nothing at all.</li>
  * </ul>
  *
- * <p>Every collaborator is mocked, so no Spring context starts and no row is read
- * or written. OVERDUE is deliberately absent: no production code path assigns it,
- * so what a loan in that state should look like is not a rule this codebase has
- * expressed yet.</p>
+ * <p>Every repository is mocked, so no Spring context starts and no row is read
+ * or written; the overdue rules are the real ones. Every loan here is due in the
+ * future, so each return owes nothing - fines are covered by
+ * {@code OverduePolicyTest} and {@code OverdueFineIntegrationTest}.</p>
  */
 @ExtendWith(MockitoExtension.class)
 class TransactionServiceReturnBookTest {
@@ -71,6 +72,10 @@ class TransactionServiceReturnBookTest {
 
     @Mock
     private UserRepository userRepository;
+
+    /** The real overdue rules at 1.00 a day, on the system clock the fixtures' dates are built from. */
+    @Spy
+    private OverduePolicy overduePolicy = new OverduePolicy("1.00");
 
     @InjectMocks
     private TransactionService transactionService;

@@ -139,10 +139,17 @@ public class Transaction {
     private LocalDate returnDate;
 
     /**
-     * Any fine owed for returning late.
+     * The fine owed for returning late, fixed when the book comes back.
      *
-     * <p>Nullable, and nothing calculates it yet - fine handling is a later
-     * step. The column is mapped only so the entity matches the table.</p>
+     * <p>Written once, by the return: the days between the due date and the
+     * return date times the daily rate, and zero for a book back on time. It
+     * stays null while the book is out, because an open loan's fine is still
+     * growing and is worked out when the loan is read. A loan returned before
+     * fines were calculated also holds null: none was ever assessed.</p>
+     *
+     * <p>A {@code Double} because that is the column's type. The amount is
+     * calculated in {@code BigDecimal} with two decimal places, so nothing is
+     * lost in storing it.</p>
      */
     @Column(name = "fine_amount")
     private Double fineAmount;

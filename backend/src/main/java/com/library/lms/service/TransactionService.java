@@ -39,10 +39,15 @@ import com.library.lms.repository.UserRepository;
 /**
  * Business logic for borrowing and returning books.
  *
- * <p>Issuing, returning and read-only lookups are implemented. Fine
- * calculation and overdue detection are not - a returned book leaves
- * {@code fineAmount} exactly as it was, and no method here changes a status
- * except {@link #returnBook}.</p>
+ * <p>Issuing, returning and read-only lookups are implemented, with overdue
+ * detection and fines. <b>Whether a loan is overdue is worked out, not
+ * stored.</b> An open loan is reported OVERDUE, with the fine it has run up so
+ * far, from the day after its due date - on every read, from the due date and
+ * today's date - so it is right the moment a due date passes, without anything
+ * having to run first, and no read ever writes. Only {@link #returnBook} stores
+ * a fine: the amount owed on the day the book came back, which is then what is
+ * reported however much later the loan is looked at. The rule, the rate and the
+ * date all come from {@link OverduePolicy}.</p>
  *
  * <p>Constructor injection with final fields, exactly as {@link BookService}
  * and {@link CategoryService} do.</p>
@@ -80,7 +85,13 @@ public class TransactionService {
      *
      * <p>Deliberately excluded: {@code book}, {@code user} and {@code library}.
      * All three are associations rather than plain columns, so sorting by them
-     * needs a join, and {@code fineAmount}, which nothing populates yet.</p>
+     * needs a join. {@code fineAmount} is excluded too: an open loan's fine is
+     * worked out when it is read rather than stored, so sorting by the column
+     * would place every overdue loan as if it owed nothing.</p>
+     *
+     * <p>{@code status} sorts by the stored state, which for an open loan is
+     * ISSUED whether or not it is past due. A status list holds one status
+     * only, so this affects just the order of a loan history.</p>
      */
     private static final Map<String, String> SORTABLE_FIELDS = Map.of(
             "id", "id",
@@ -95,12 +106,16 @@ public class TransactionService {
 
     private final UserRepository userRepository;
 
+    private final OverduePolicy overduePolicy;
+
     public TransactionService(TransactionRepository transactionRepository,
                               BookRepository bookRepository,
-                              UserRepository userRepository) {
+                              UserRepository userRepository,
+                              OverduePolicy overduePolicy) {
         this.transactionRepository = transactionRepository;
         this.bookRepository = bookRepository;
         this.userRepository = userRepository;
+        this.overduePolicy = overduePolicy;
     }
 
     /**
@@ -155,9 +170,11 @@ public class TransactionService {
     @Transactional
     public TransactionResponse issueBook(Long bookId, Long memberId, String username, LocalDate dueDate) {
         // Stamped once, here, and used for both the check below and the stored
-        // row. Calling LocalDate.now() twice would compare one instant and save
-        // another, which is the whole failure this guard exists to prevent.
-        LocalDate issueDate = LocalDate.now();
+        // row. Asking for the date twice would compare one day and save another,
+        // which is the whole failure this guard exists to prevent. It comes from
+        // the clock overdue loans are judged by, so a loan and its fine never
+        // disagree about what day it is.
+        LocalDate issueDate = overduePolicy.today();
 
         // Checked before any lookup, so a request that cannot produce a valid
         // loan never touches the database. The DTO's @FutureOrPresent still
@@ -245,7 +262,7 @@ public class TransactionService {
 
         transaction.setStatus(TransactionStatus.ISSUED);
 
-        return toResponse(transactionRepository.save(transaction));
+        return toResponse(transactionRepository.save(transaction), issueDate);
     }
 
     /**
@@ -260,9 +277,18 @@ public class TransactionService {
      * <p>Everything is validated before anything is written, so a rejected
      * return leaves no partial state: no date, no status change, no increment.</p>
      *
-     * <p>{@code fineAmount} is deliberately left untouched. Overdue charges are
-     * a later step, and quietly writing a zero here would be indistinguishable
-     * from a fine that had been calculated and found to be nil.</p>
+     * <p><b>The fine is fixed here.</b> It is the days between the due date and
+     * the return date times the daily rate - zero for a book back on or before
+     * its due date - and it is stored. That amount is final: every later read
+     * reports it rather than recalculating, so a loan returned long ago does not
+     * go on accruing, and a later change of rate does not rewrite what was owed.
+     * A zero is written rather than left null, because a fine has now been
+     * worked out and found to be nothing.</p>
+     *
+     * <p><b>A fine cannot be charged twice.</b> Only an open loan can be
+     * returned, so a second return is refused before anything is calculated,
+     * and two returns racing each other collide on the row's version: the second
+     * fails instead of closing the loan again.</p>
      *
      * <p>The loan is fetched within the caller's own library. Before that this
      * method took no authenticated name at all, so any staff member could close
@@ -293,10 +319,12 @@ public class TransactionService {
                 .findByIdAndLibraryId(transactionId, libraryId)
                 .orElseThrow(() -> new TransactionNotFoundException(transactionId));
 
-        // Only an open loan can be closed. Checking for ISSUED rather than
-        // "not RETURNED" means a future status such as LOST is refused by
-        // default instead of being silently treated as returnable.
-        if (transaction.getStatus() != TransactionStatus.ISSUED) {
+        // Only an open loan can be closed: ISSUED, or OVERDUE should a row have
+        // been stored that way - an overdue book is the one that most needs to
+        // come back. Naming the open states rather than testing for "not
+        // RETURNED" means a future status such as LOST is refused by default
+        // instead of being silently treated as returnable.
+        if (!overduePolicy.isOpen(transaction.getStatus())) {
             throw new ReturnBookNotAllowedException(transactionId, transaction.getStatus());
         }
 
@@ -330,10 +358,15 @@ public class TransactionService {
         book.setAvailableCopies(availableCopies + 1);
         bookRepository.save(book);
 
-        transaction.setReturnDate(LocalDate.now());
+        // One date for both: the day the book came back is the day its fine is
+        // counted to.
+        LocalDate returnDate = overduePolicy.today();
+
+        transaction.setReturnDate(returnDate);
+        transaction.setFineAmount(overduePolicy.fineFor(transaction.getDueDate(), returnDate).doubleValue());
         transaction.setStatus(TransactionStatus.RETURNED);
 
-        return toResponse(transactionRepository.save(transaction));
+        return toResponse(transactionRepository.save(transaction), returnDate);
     }
 
     /**
@@ -382,7 +415,7 @@ public class TransactionService {
 
         if (maySeeAnyUsersActivity(authenticatedUser)) {
             return toResponse(transaction
-                    .orElseThrow(() -> new TransactionNotFoundException(transactionId)));
+                    .orElseThrow(() -> new TransactionNotFoundException(transactionId)), overduePolicy.today());
         }
 
         // A member gets one answer to two different questions. Returning 404 for
@@ -393,7 +426,7 @@ public class TransactionService {
         return toResponse(transaction
                 .filter(loan -> loan.getUser() != null
                         && Objects.equals(loan.getUser().getId(), authenticatedUser.getId()))
-                .orElseThrow(TransactionAccessDeniedException::new));
+                .orElseThrow(TransactionAccessDeniedException::new), overduePolicy.today());
     }
 
     /**
@@ -448,7 +481,7 @@ public class TransactionService {
         Page<Transaction> transactions =
                 transactionRepository.findByBookIdAndLibraryId(bookId, libraryId, pageable);
 
-        return toPagedResponse(transactions);
+        return toPagedResponse(transactions, overduePolicy.today());
     }
 
     /**
@@ -568,7 +601,7 @@ public class TransactionService {
         Page<Transaction> transactions =
                 transactionRepository.findByUserIdAndLibraryId(userId, libraryId, pageable);
 
-        return toPagedResponse(transactions);
+        return toPagedResponse(transactions, overduePolicy.today());
     }
 
     /**
@@ -578,10 +611,12 @@ public class TransactionService {
      * unrecognised value is rejected by Spring's own conversion at the edge and
      * never reaches a query.</p>
      *
-     * <p>Note this reports the status <b>as stored</b>. Nothing here recomputes
-     * whether an ISSUED loan is now past its due date - overdue detection is a
-     * later step, so asking for OVERDUE returns only rows already marked that
-     * way.</p>
+     * <p><b>ISSUED and OVERDUE are decided by the due date</b>, exactly as a
+     * single loan is reported. OVERDUE is every open loan whose due date is
+     * before today, each with its fine so far; ISSUED is every open loan not yet
+     * past due. A loan moves from one list to the other the day after its due
+     * date without anything being written. RETURNED is the stored state, with
+     * the fine fixed on return.</p>
      *
      * <p>Scoped to the caller's library, which this endpoint needed more than
      * any other: unscoped, one request for ISSUED returned every open loan held
@@ -621,10 +656,24 @@ public class TransactionService {
 
         Pageable pageable = PageRequest.of(page, size, resolveSort(sortBy, direction));
 
-        Page<Transaction> transactions =
-                transactionRepository.findByStatusAndLibraryId(status, libraryId, pageable);
+        // One date for the query and for the mapping, so a loan is never
+        // selected as overdue and then reported as ISSUED - or the reverse - by
+        // a request that happens to run across midnight.
+        LocalDate today = overduePolicy.today();
 
-        return toPagedResponse(transactions);
+        // ISSUED and OVERDUE are both open loans, told apart by today's date
+        // rather than by the stored status; RETURNED is exactly what is stored.
+        // A switch over the enum, so a status added later does not compile here
+        // until somebody decides which rows it means.
+        Page<Transaction> transactions = switch (status) {
+            case ISSUED -> transactionRepository.findByStatusInAndDueDateGreaterThanEqualAndLibraryId(
+                    OverduePolicy.OPEN_STATUSES, today, libraryId, pageable);
+            case OVERDUE -> transactionRepository.findByStatusInAndDueDateBeforeAndLibraryId(
+                    OverduePolicy.OPEN_STATUSES, today, libraryId, pageable);
+            case RETURNED -> transactionRepository.findByStatusAndLibraryId(status, libraryId, pageable);
+        };
+
+        return toPagedResponse(transactions, today);
     }
 
     /**
@@ -635,10 +684,10 @@ public class TransactionService {
      * and the entities always stop at this layer - a Transaction holds a User,
      * and a User holds a password hash.</p>
      */
-    private PagedResponse<TransactionResponse> toPagedResponse(Page<Transaction> transactions) {
+    private PagedResponse<TransactionResponse> toPagedResponse(Page<Transaction> transactions, LocalDate today) {
         List<TransactionResponse> content = transactions.getContent()
                 .stream()
-                .map(this::toResponse)
+                .map(transaction -> toResponse(transaction, today))
                 .toList();
 
         return new PagedResponse<>(
@@ -725,8 +774,26 @@ public class TransactionService {
      * <p>Null-safe on both associations. Both columns are NOT NULL so neither
      * should ever be absent, but a mapper that throws a NullPointerException on
      * unexpected data is harder to diagnose than one that reports the null.</p>
+     *
+     * <p><b>An open loan is described as it stands on {@code today}</b>: OVERDUE
+     * with its fine so far once its due date has passed, ISSUED with nothing owed
+     * until then. The caller passes the date, so every loan in one response - and
+     * the query that selected them - is judged by the same day. A returned loan
+     * is described exactly as stored, fine included.</p>
      */
-    private TransactionResponse toResponse(Transaction transaction) {
+    private TransactionResponse toResponse(Transaction transaction, LocalDate today) {
+        TransactionStatus status = transaction.getStatus();
+        Double fineAmount = transaction.getFineAmount();
+
+        // Worked out here and never written, so reading a loan any number of
+        // times cannot change it.
+        if (overduePolicy.isOpen(status)) {
+            boolean overdue = overduePolicy.isOverdue(transaction.getDueDate(), today);
+
+            status = overdue ? TransactionStatus.OVERDUE : TransactionStatus.ISSUED;
+            fineAmount = overdue ? overduePolicy.fineFor(transaction.getDueDate(), today).doubleValue() : null;
+        }
+
         return new TransactionResponse(
                 transaction.getId(),
                 transaction.getBook() != null ? transaction.getBook().getId() : null,
@@ -734,7 +801,7 @@ public class TransactionService {
                 transaction.getIssueDate(),
                 transaction.getDueDate(),
                 transaction.getReturnDate(),
-                transaction.getFineAmount(),
-                transaction.getStatus());
+                fineAmount,
+                status);
     }
 }

@@ -18,6 +18,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -79,6 +80,10 @@ class TransactionServiceStatusPaginationTest {
     @Mock
     private UserRepository userRepository;
 
+    /** The real overdue rules at 1.00 a day, on the system clock the fixtures' dates are built from. */
+    @Spy
+    private OverduePolicy overduePolicy = new OverduePolicy("1.00");
+
     @InjectMocks
     private TransactionService transactionService;
 
@@ -125,15 +130,15 @@ class TransactionServiceStatusPaginationTest {
 
     /** Stubs the scoped query with one page carved out of a larger total. */
     private void repositoryReturns(List<Transaction> content, Pageable pageable, long total) {
-        when(transactionRepository.findByStatusAndLibraryId(
-                eq(TransactionStatus.ISSUED), eq(LIBRARY_ID), any(Pageable.class)))
+        when(transactionRepository.findByStatusInAndDueDateGreaterThanEqualAndLibraryId(
+                eq(OverduePolicy.OPEN_STATUSES), any(LocalDate.class), eq(LIBRARY_ID), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(content, pageable, total));
     }
 
     private Pageable capturedPageable() {
         ArgumentCaptor<Pageable> captor = ArgumentCaptor.forClass(Pageable.class);
-        verify(transactionRepository).findByStatusAndLibraryId(
-                eq(TransactionStatus.ISSUED), eq(LIBRARY_ID), captor.capture());
+        verify(transactionRepository).findByStatusInAndDueDateGreaterThanEqualAndLibraryId(
+                eq(OverduePolicy.OPEN_STATUSES), any(LocalDate.class), eq(LIBRARY_ID), captor.capture());
         return captor.getValue();
     }
 
@@ -251,8 +256,8 @@ class TransactionServiceStatusPaginationTest {
     @Test
     void everyPromisedSortFieldIsAccepted() {
         callerIs(STAFF, Role.ROLE_LIBRARIAN);
-        when(transactionRepository.findByStatusAndLibraryId(
-                eq(TransactionStatus.ISSUED), eq(LIBRARY_ID), any(Pageable.class)))
+        when(transactionRepository.findByStatusInAndDueDateGreaterThanEqualAndLibraryId(
+                eq(OverduePolicy.OPEN_STATUSES), any(LocalDate.class), eq(LIBRARY_ID), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of()));
 
         for (String field : List.of("id", "issueDate", "dueDate", "returnDate", "status")) {
@@ -278,7 +283,7 @@ class TransactionServiceStatusPaginationTest {
                 .isInstanceOf(InvalidSortException.class);
 
         verify(transactionRepository, never())
-                .findByStatusAndLibraryId(any(TransactionStatus.class), any(Long.class), any(Pageable.class));
+                .findByStatusInAndDueDateGreaterThanEqualAndLibraryId(any(), any(), any(), any());
     }
 
     @Test
@@ -333,7 +338,7 @@ class TransactionServiceStatusPaginationTest {
                 .isInstanceOf(InvalidPaginationException.class);
 
         verify(transactionRepository, never())
-                .findByStatusAndLibraryId(any(TransactionStatus.class), any(Long.class), any(Pageable.class));
+                .findByStatusInAndDueDateGreaterThanEqualAndLibraryId(any(), any(), any(), any());
     }
 
     // ---------- library isolation and authorization ----------
@@ -346,10 +351,10 @@ class TransactionServiceStatusPaginationTest {
         callWith(0, 10, "id", "asc", STAFF);
 
         // Never another library's id, and never anything the caller supplied.
-        verify(transactionRepository).findByStatusAndLibraryId(
-                eq(TransactionStatus.ISSUED), eq(LIBRARY_ID), any(Pageable.class));
-        verify(transactionRepository, never()).findByStatusAndLibraryId(
-                any(TransactionStatus.class), eq(OTHER_LIBRARY_ID), any(Pageable.class));
+        verify(transactionRepository).findByStatusInAndDueDateGreaterThanEqualAndLibraryId(
+                eq(OverduePolicy.OPEN_STATUSES), any(LocalDate.class), eq(LIBRARY_ID), any(Pageable.class));
+        verify(transactionRepository, never()).findByStatusInAndDueDateGreaterThanEqualAndLibraryId(
+                any(), any(), eq(OTHER_LIBRARY_ID), any(Pageable.class));
     }
 
     @Test
@@ -363,8 +368,8 @@ class TransactionServiceStatusPaginationTest {
     @Test
     void anAdminMayReadTheirOwnLibrarysLoans() {
         callerIs(ADMIN, Role.ROLE_ADMIN);
-        when(transactionRepository.findByStatusAndLibraryId(
-                eq(TransactionStatus.ISSUED), eq(LIBRARY_ID), any(Pageable.class)))
+        when(transactionRepository.findByStatusInAndDueDateGreaterThanEqualAndLibraryId(
+                eq(OverduePolicy.OPEN_STATUSES), any(LocalDate.class), eq(LIBRARY_ID), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(loans(1), PageRequest.of(0, 10), 1));
 
         assertThat(transactionService.getTransactionsByStatus(
@@ -386,10 +391,10 @@ class TransactionServiceStatusPaginationTest {
 
         callWith(0, 10, "id", "asc", MEMBER);
 
-        verify(transactionRepository).findByStatusAndLibraryId(
-                eq(TransactionStatus.ISSUED), eq(LIBRARY_ID), any(Pageable.class));
-        verify(transactionRepository, never()).findByStatusAndLibraryId(
-                any(TransactionStatus.class), eq(OTHER_LIBRARY_ID), any(Pageable.class));
+        verify(transactionRepository).findByStatusInAndDueDateGreaterThanEqualAndLibraryId(
+                eq(OverduePolicy.OPEN_STATUSES), any(LocalDate.class), eq(LIBRARY_ID), any(Pageable.class));
+        verify(transactionRepository, never()).findByStatusInAndDueDateGreaterThanEqualAndLibraryId(
+                any(), any(), eq(OTHER_LIBRARY_ID), any(Pageable.class));
     }
 
     @Test

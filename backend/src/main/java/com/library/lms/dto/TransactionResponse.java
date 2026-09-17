@@ -21,9 +21,11 @@ import lombok.ToString;
  * the book's details can ask {@code /api/books/{id}}.</p>
  *
  * <p>{@code returnDate} and {@code fineAmount} are included even though they are
- * null for a freshly issued book. Null is meaningful here - it says the book is
- * still out and nothing is owed - and keeping the fields present means the same
- * response shape describes a loan at every stage of its life.</p>
+ * null for a freshly issued book, so the same response shape describes a loan
+ * at every stage of its life. {@code status} and {@code fineAmount} describe the
+ * loan as it stands on the day of the request: an open loan past its due date
+ * is OVERDUE with the fine it has run up so far, and a returned loan carries
+ * the fine fixed when it came back.</p>
  *
  * <p>Output only, and it holds no entity. {@link TransactionStatus} is an enum
  * rather than an entity, so exposing it publishes a fixed vocabulary
@@ -52,7 +54,12 @@ public class TransactionResponse {
     /** Null while the book is still out. */
     private LocalDate returnDate;
 
-    /** Null unless a fine has been assessed. */
+    /**
+     * What is owed for lateness: the amount so far for an open overdue loan, the
+     * amount fixed on return for a returned one - zero if it came back on time.
+     * Null for an open loan that is not overdue, and for a loan returned before
+     * fines were calculated.
+     */
     private Double fineAmount;
 
     private TransactionStatus status;
