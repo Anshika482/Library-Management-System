@@ -157,6 +157,22 @@
         </dependency>
 
         <!--
+            Actuator: health and readiness endpoints for whatever runs this
+            application - a load balancer, an orchestrator, a monitor - to ask
+            whether it is alive and whether it can take traffic.
+
+            Actuator can publish far more than that (environment, configuration,
+            beans, heap dumps), so on its own it is a liability. What is actually
+            reachable is decided in application.properties: only health and
+            info, with no details. No version tag - the Spring Boot parent
+            manages it.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <!--
             DevTools: automatically restarts the app when you recompile, so you
             do not have to stop/start the server after every change.
             "optional" means it is never shipped to whoever uses your jar.

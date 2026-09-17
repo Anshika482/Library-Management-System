@@ -120,6 +120,12 @@ public class SecurityConfig {
      *       was a 403 with no body and no content type, so the filter chain
      *       answered in a different shape from every controller. See
      *       {@link RestAccessDeniedHandler}.</li>
+     *   <li><b>Health probes public</b> - {@code GET} on the health, liveness,
+     *       readiness and info paths needs no token, because a load balancer or
+     *       orchestrator has none. Only those exact paths and only GET: every
+     *       other actuator path falls to the catch-all, and Actuator exposes
+     *       nothing else in any case. The responses carry a status and nothing
+     *       more - see application.properties.</li>
      *   <li><b>CORS answered first</b> - {@link CorsConfig} decides which other
      *       sites a browser may call this API from. Its filter sits ahead of
      *       authentication, so a browser's preflight, which never carries a
@@ -170,6 +176,14 @@ public class SecurityConfig {
 
                 .authorizeHttpRequests(requests -> requests
                         .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()
+
+                        // Health probes, for callers that have no token: a load
+                        // balancer, an orchestrator, a monitor. GET only, and these
+                        // exact paths only - a health component path such as
+                        // /actuator/health/db, and everything else under /actuator,
+                        // still needs authentication below.
+                        .requestMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/liveness",
+                                "/actuator/health/readiness", "/actuator/info").permitAll()
 
                         .requestMatchers(HttpMethod.POST, "/api/books").hasAnyAuthority(ADMIN, LIBRARIAN)
                         .requestMatchers(HttpMethod.PUT, "/api/books/**").hasAnyAuthority(ADMIN, LIBRARIAN)
