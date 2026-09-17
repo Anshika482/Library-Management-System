@@ -53,6 +53,10 @@ public class UserController {
      * the request body - the administrator cannot claim to be someone else, and
      * the library the change is confined to is read from their own account.</p>
      *
+     * <p>An administrator cannot disable or lock their own account: that
+     * answers 400 and changes nothing, because nobody could reverse it through
+     * the API.</p>
+     *
      * @param userId         the account to change
      * @param request        the switches to move
      * @param authentication the administrator, supplied by the filter chain

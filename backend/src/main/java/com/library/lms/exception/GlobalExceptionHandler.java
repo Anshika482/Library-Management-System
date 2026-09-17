@@ -346,6 +346,24 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handles an administrator's attempt to disable or lock their own account.
+     *
+     * <p><b>400 BAD REQUEST</b>, like the other requests this API refuses on
+     * their content: the account exists and the caller may change others, but
+     * this change is one no administrator may make to themselves. The message is
+     * the exception's fixed sentence.</p>
+     */
+    @ExceptionHandler(SelfLockoutException.class)
+    public ResponseEntity<ErrorResponse> handleSelfLockout(SelfLockoutException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.BAD_REQUEST.value(),
+                exception.getMessage(),
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorResponse);
+    }
+
+    /**
      * Handles a reference to a user account that does not exist.
      *
      * <p><b>404 NOT FOUND</b>, for the same reason as a missing book: the

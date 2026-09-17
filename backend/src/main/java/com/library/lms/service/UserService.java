@@ -1,6 +1,7 @@
 package com.library.lms.service;
 
 import java.util.EnumSet;
+import java.util.Objects;
 import java.util.Set;
 
 import org.slf4j.Logger;
@@ -20,6 +21,7 @@ import com.library.lms.entity.User;
 import com.library.lms.exception.DuplicateAccountException;
 import com.library.lms.exception.InvalidCurrentPasswordException;
 import com.library.lms.exception.RoleNotAssignableException;
+import com.library.lms.exception.SelfLockoutException;
 import com.library.lms.exception.UserNotFoundException;
 import com.library.lms.repository.UserRepository;
 
@@ -182,12 +184,24 @@ public class UserService {
      * changes nothing and returns the account as it stands, which is a harmless
      * answer to a request that asked for nothing.</p>
      *
+     * <p><b>No administrator can shut themselves out.</b> This endpoint is the
+     * only way back from a disabled or locked account, and it needs an
+     * administrator who can still log in; in a library with one administrator,
+     * disabling your own account would leave nobody able to undo it. So a
+     * request that would disable or lock the caller's own account is refused,
+     * before either switch is set - a refused request changes nothing, including
+     * a switch it was allowed to move. Enabling or unlocking your own account, or
+     * sending neither, stays allowed: none of those can lock anyone out. Other
+     * accounts in the library, other administrators included, are unaffected.</p>
+     *
      * @param userId                the account to change
      * @param request               which switches to move
      * @param authenticatedUsername the administrator making the change
      * @return the account's identity and its status after the change
      * @throws UserNotFoundException if the id is unknown, or belongs to another
      *                               library
+     * @throws SelfLockoutException  if the administrator would disable or lock
+     *                               their own account
      */
     @Transactional
     public UserStatusResponse updateStatus(Long userId, UserStatusRequest request,
@@ -197,6 +211,14 @@ public class UserService {
 
         User target = userRepository.findByIdAndLibraryId(userId, libraryId)
                 .orElseThrow(() -> new UserNotFoundException(userId));
+
+        // After the scoped lookup, so an id from another library is still the
+        // same 404 as before, and before anything is set, so a refusal leaves
+        // the account exactly as it was.
+        if (Objects.equals(target.getId(), administrator.getId()) && wouldLockOut(request)) {
+            log.warn("Self-lockout refused for admin='{}': user id={}", administrator.getUsername(), target.getId());
+            throw new SelfLockoutException();
+        }
 
         if (request.getEnabled() != null) {
             target.setEnabled(request.getEnabled());
@@ -218,6 +240,11 @@ public class UserService {
                 saved.getUsername(),
                 saved.isEnabled(),
                 saved.isAccountNonLocked());
+    }
+
+    /** Whether the request would disable or lock the account it is applied to. */
+    private static boolean wouldLockOut(UserStatusRequest request) {
+        return Boolean.FALSE.equals(request.getEnabled()) || Boolean.FALSE.equals(request.getAccountNonLocked());
     }
 
     private User authenticatedUser(String authenticatedUsername) {
