@@ -11,6 +11,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -119,6 +120,12 @@ public class SecurityConfig {
      *       was a 403 with no body and no content type, so the filter chain
      *       answered in a different shape from every controller. See
      *       {@link RestAccessDeniedHandler}.</li>
+     *   <li><b>CORS answered first</b> - {@link CorsConfig} decides which other
+     *       sites a browser may call this API from. Its filter sits ahead of
+     *       authentication, so a browser's preflight, which never carries a
+     *       token, is answered instead of refused with a 401, and a request from
+     *       an origin that is not listed is refused before any token is read.
+     *       See {@link RestCorsProcessor}.</li>
      *   <li><b>JWT filter inserted</b> - {@link JwtAuthenticationFilter} runs
      *       ahead of {@link UsernamePasswordAuthenticationFilter}, the slot
      *       Spring Security reserves for whatever establishes identity. It
@@ -141,6 +148,12 @@ public class SecurityConfig {
             AuthenticationEntryPoint restAuthenticationEntryPoint,
             AccessDeniedHandler restAccessDeniedHandler) throws Exception {
         http
+                // Uses the corsFilter bean from CorsConfig - Spring Security looks
+                // for exactly that name - and places it ahead of authentication,
+                // so a browser's preflight is answered rather than refused for
+                // carrying no token, and an unlisted origin is refused before any
+                // token is read.
+                .cors(Customizer.withDefaults())
                 .csrf(AbstractHttpConfigurer::disable)
                 .formLogin(AbstractHttpConfigurer::disable)
                 .httpBasic(AbstractHttpConfigurer::disable)
