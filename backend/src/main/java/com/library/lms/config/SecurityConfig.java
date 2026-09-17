@@ -186,6 +186,12 @@ public class SecurityConfig {
                         // thought of today.
                         .requestMatchers("/api/users/**").hasAuthority(ADMIN)
 
+                        // Registering a library is administrators only as well,
+                        // for every verb on the path. The request carries a name
+                        // and nothing else, so it cannot attach the new library
+                        // to its creator or to anyone.
+                        .requestMatchers("/api/libraries/**").hasAuthority(ADMIN)
+
                         .anyRequest().authenticated())
                 .exceptionHandling(exceptions -> exceptions
                         .authenticationEntryPoint(restAuthenticationEntryPoint)

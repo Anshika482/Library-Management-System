@@ -381,6 +381,24 @@ public class GlobalExceptionHandler {
      * particular account is staff, disabled or locked.</p>
      */
     /**
+     * Handles a library created under a name another library already has.
+     *
+     * <p><b>400 BAD REQUEST</b>, the same answer as a duplicate ISBN, category
+     * or account. The message is the exception's fixed sentence and does not
+     * repeat the name: the caller knows what they sent, and a response is no
+     * place to reflect a client's input back.</p>
+     */
+    @ExceptionHandler(DuplicateLibraryException.class)
+    public ResponseEntity<ErrorResponse> handleDuplicateLibrary(DuplicateLibraryException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.BAD_REQUEST.value(),
+                exception.getMessage(),
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorResponse);
+    }
+
+    /**
      * Handles an account that cannot be created under the name or email asked
      * for.
      *
