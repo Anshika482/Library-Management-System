@@ -130,6 +130,33 @@
         </dependency>
 
         <!--
+            Flyway: versioned database migrations. The SQL files under
+            src/main/resources/db/migration are the production schema's source
+            of truth. At startup Spring Boot applies, in version order, any the
+            database has not yet recorded, and finishes before Hibernate is
+            built - so in production Hibernate only ever validates the result.
+
+            Two artifacts, because Flyway 10 moved support for each database
+            out of the core into a module of its own: with flyway-core alone,
+            startup fails with "Unsupported Database: MySQL". Neither carries a
+            version - the Spring Boot parent manages both, at Flyway 11.7.2 for
+            Spring Boot 3.5.16.
+
+            Being on the classpath does not switch it on everywhere.
+            application.properties turns it off for development and the tests,
+            whose databases ddl-auto built, and application-prod.properties
+            turns it on.
+        -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-mysql</artifactId>
+        </dependency>
+
+        <!--
             DevTools: automatically restarts the app when you recompile, so you
             do not have to stop/start the server after every change.
             "optional" means it is never shipped to whoever uses your jar.

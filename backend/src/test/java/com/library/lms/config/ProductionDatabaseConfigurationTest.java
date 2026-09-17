@@ -189,12 +189,43 @@ class ProductionDatabaseConfigurationTest {
         });
     }
 
+    @Test
+    void theProductionProfileBuildsTheSchemaWithFlywayAndHibernateOnlyValidatesIt() throws Exception {
+        Properties production = productionProfile();
+
+        assertThat(production.getProperty("spring.flyway.enabled")).isEqualTo("true");
+        assertThat(production.getProperty("spring.flyway.locations")).isEqualTo("classpath:db/migration");
+        assertThat(production.getProperty("spring.jpa.hibernate.ddl-auto"))
+                .as("Hibernate checks the migrated schema and alters nothing")
+                .isEqualTo("validate");
+        assertThat(production.getProperty("spring.flyway.clean-disabled"))
+                .as("clean drops every object in the schema")
+                .isEqualTo("true");
+        assertThat(production.getProperty("spring.flyway.baseline-on-migrate"))
+                .as("an unrecognised non-empty database must stop startup, not be adopted silently")
+                .isEqualTo("false");
+    }
+
+    @Test
+    void theDevelopmentDefaultsLeaveFlywayOff() throws Exception {
+        // The context smoke test connects to the developer's own database,
+        // which ddl-auto built and which has no Flyway history. Flyway on by
+        // default would stop that test - and every developer's startup - cold.
+        Properties development = properties("/application.properties");
+
+        assertThat(development.getProperty("spring.flyway.enabled")).isEqualTo("false");
+        assertThat(development.getProperty("spring.jpa.hibernate.ddl-auto")).isEqualTo("update");
+    }
+
     private static Properties productionProfile() throws Exception {
+        return properties("/application-prod.properties");
+    }
+
+    private static Properties properties(String resource) throws Exception {
         Properties properties = new Properties();
 
-        try (InputStream file = ProductionDatabaseConfigurationTest.class
-                .getResourceAsStream("/application-prod.properties")) {
-            assertThat(file).as("application-prod.properties must be on the classpath").isNotNull();
+        try (InputStream file = ProductionDatabaseConfigurationTest.class.getResourceAsStream(resource)) {
+            assertThat(file).as("%s must be on the classpath", resource).isNotNull();
             properties.load(file);
         }
 
