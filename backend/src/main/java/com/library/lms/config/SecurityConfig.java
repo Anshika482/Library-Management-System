@@ -94,12 +94,14 @@ public class SecurityConfig {
      *       JWT later. Leaving Basic enabled would keep a second, weaker way in
      *       that nobody intends to use.</li>
      *   <li><b>Login public, writes restricted, everything else
-     *       authenticated</b> - the login matcher names one method and one
-     *       exact path, so only {@code POST /api/auth/login} is open. A
+     *       authenticated</b> - the public auth matchers name one method and
+     *       exact paths, so only {@code POST} on login, refresh and logout is
+     *       open; refresh and logout carry their own credential, the refresh
+     *       token, because the access token may already have expired. A
      *       pattern such as {@code /api/auth/**} would have been shorter and
      *       would have quietly exposed every future route under that prefix,
-     *       which is how a logout or password reset endpoint ends up public
-     *       by accident.</li>
+     *       which is how a password reset endpoint ends up public by
+     *       accident.</li>
      *   <li><b>Creating, editing and deleting</b> books and categories, and
      *       issuing or returning a book, require ADMIN or LIBRARIAN. Reading
      *       any of them requires only authentication, so a member can browse
@@ -176,6 +178,11 @@ public class SecurityConfig {
 
                 .authorizeHttpRequests(requests -> requests
                         .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()
+
+                        // For a caller whose access token may already have expired:
+                        // the refresh token in the body is the credential, and
+                        // RefreshTokenService checks it. POST and these exact paths only.
+                        .requestMatchers(HttpMethod.POST, "/api/auth/refresh", "/api/auth/logout").permitAll()
 
                         // Health probes, for callers that have no token: a load
                         // balancer, an orchestrator, a monitor. GET only, and these

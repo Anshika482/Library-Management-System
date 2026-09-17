@@ -57,9 +57,13 @@ public class UserService {
 
     private final PasswordEncoder passwordEncoder;
 
-    public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder) {
+    private final RefreshTokenService refreshTokenService;
+
+    public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder,
+            RefreshTokenService refreshTokenService) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
+        this.refreshTokenService = refreshTokenService;
     }
 
     /**
@@ -141,6 +145,12 @@ public class UserService {
      * from the request and not written, so this endpoint cannot be used to
      * promote an account or move it between libraries.</p>
      *
+     * <p><b>Every refresh session ends.</b> The account's refresh tokens are
+     * revoked in the same transaction, so a refresh token taken before the
+     * change - from a lost device, say - cannot keep a session going for days
+     * after it. An access token already issued lasts until it expires, as
+     * before.</p>
+     *
      * @param request               the current and replacement passwords
      * @param authenticatedUsername whose password is being changed
      * @throws InvalidCurrentPasswordException if the current password is wrong
@@ -160,7 +170,10 @@ public class UserService {
         user.setPassword(passwordEncoder.encode(request.getNewPassword()));
         userRepository.save(user);
 
-        log.info("Password changed for username='{}'", user.getUsername());
+        int revoked = refreshTokenService.revokeAllFor(user);
+
+        log.info("Password changed for username='{}': {} live refresh token(s) revoked",
+                user.getUsername(), revoked);
     }
 
     private static UserResponse toResponse(User user) {

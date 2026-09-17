@@ -174,12 +174,14 @@ class FlywayMigrationIntegrationTest {
                 .as("every migration, in order, applied on this run to an empty schema")
                 .containsExactly(
                         "1 | initial schema | SQL | true",
-                        "2 | fine payment tracking | SQL | true");
+                        "2 | fine payment tracking | SQL | true",
+                        "3 | refresh tokens | SQL | true");
 
         assertThat(jdbcTemplate.queryForList(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = ? ORDER BY table_name",
                 String.class, MIGRATED))
-                .containsExactly("books", "categories", "flyway_schema_history", "libraries", "transactions", "users");
+                .containsExactly("books", "categories", "flyway_schema_history", "libraries", "refresh_tokens",
+                        "transactions", "users");
     }
 
     @Test

@@ -832,6 +832,24 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handles a refresh token that cannot be used.
+     *
+     * <p><b>401</b>: the credential offered was not accepted. One fixed sentence
+     * for every reason - unknown, already used, revoked at logout, expired, or
+     * belonging to an account that is disabled or locked - so the answer cannot
+     * be used to find out which.</p>
+     */
+    @ExceptionHandler(InvalidRefreshTokenException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidRefreshToken(InvalidRefreshTokenException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.UNAUTHORIZED.value(),
+                exception.getMessage(),
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(errorResponse);
+    }
+
+    /**
      * Handles a login attempt whose credentials do not check out.
      *
      * <p>{@link AuthenticationException} is Spring Security's base type for
