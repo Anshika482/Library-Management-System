@@ -36,19 +36,22 @@ public class LibraryController {
     }
 
     /**
-     * Creates a library.
+     * Creates a library together with its first administrator.
      *
-     * <p>{@code @Valid} rejects a missing, blank or over-long name through the
-     * existing validation handler before this method runs. The body carries a
-     * name and nothing else, so neither the new library's id nor anything about
-     * its creator can be chosen by the client.</p>
+     * <p>{@code @Valid} rejects a missing, blank or over-long name, a missing
+     * administrator, and an administrator's username, email or password that
+     * breaks the usual account rules - all through the existing validation
+     * handler, before this method runs.</p>
      *
-     * <p>The new library starts with no accounts, and creating it does not make
-     * the caller a member of it: their own account and library are unchanged.</p>
+     * <p>The body describes the library and that one account and nothing else:
+     * neither the library's id nor the administrator's role or library can be
+     * chosen by the client. The creator's own account and library are
+     * unchanged.</p>
      *
-     * @param request        the library to create
-     * @param authentication the administrator, supplied by the filter chain
-     * @return 201 with the new library
+     * @param request        the library and its first administrator
+     * @param authentication the administrator creating it, supplied by the
+     *                       filter chain
+     * @return 201 with the new library and its administrator
      */
     @PostMapping
     public ResponseEntity<LibraryResponse> createLibrary(@Valid @RequestBody CreateLibraryRequest request,

@@ -12,9 +12,10 @@ import lombok.ToString;
  * A library as it is described back to the administrator who created it.
  *
  * <p>The id the database assigned, the name as stored - trimmed, so a client
- * can see exactly what was kept - and when it was registered. Nothing about
- * who created it or who belongs to it: a new library has no accounts, and the
- * creator's own account is untouched.</p>
+ * can see exactly what was kept - when it was registered, and its first
+ * administrator. That account is described the way the user endpoint describes
+ * any account, so with no password and no hash. Nothing here concerns the
+ * creator, whose own account is untouched.</p>
  */
 @Getter
 @Setter
@@ -28,4 +29,6 @@ public class LibraryResponse {
     private String name;
 
     private LocalDateTime createdAt;
+
+    private UserResponse admin;
 }

@@ -24,6 +24,7 @@ import org.springframework.test.web.servlet.MvcResult;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.library.lms.dto.CreateLibraryRequest;
 import com.library.lms.entity.Library;
 import com.library.lms.entity.Role;
@@ -35,12 +36,15 @@ import com.library.lms.repository.UserRepository;
  * Proves an administrator can register a new library, and that nobody else can
  * - the one way a second tenant used to arrive was a row inserted by hand.
  *
- * <p><b>The request can name the library and nothing more.</b> A body carrying
- * an id, a role or the creator's own id is accepted for its name and the rest
- * is ignored, and that is asserted, not assumed: the id sent is an existing
- * library's, so honouring it would visibly overwrite that library.</p>
+ * <p><b>The request describes the library and its first administrator, and
+ * nothing more.</b> A body that also carries an id, a role or the creator's own
+ * id is accepted for what it may describe and the rest is ignored, and that is
+ * asserted, not assumed: the id sent is an existing library's, so honouring it
+ * would visibly overwrite that library. The first administrator itself is
+ * covered by {@link FirstLibraryAdminIntegrationTest}; here every request simply
+ * carries a valid one.</p>
  *
- * <p><b>The creator gains nothing.</b> Their account is read back after each
+ * <p><b>The creator gains nothing.</b> Their account is read back after
  * creation and must still belong to the same library with the same role.</p>
  *
  * <p><b>Nothing is created on refusal.</b> Every refused request - a duplicate,
@@ -63,6 +67,9 @@ class LibraryProvisioningIntegrationTest {
     /** Test-only credential, never a real one, and never reused outside this class. */
     private static final String TEST_PASSWORD = "step151-test-only-password";
 
+    /** Test-only password for the first administrators these requests create. */
+    private static final String FIRST_ADMIN_PASSWORD = "step151-first-admin-password";
+
     private static final String DUPLICATE_MESSAGE = "A library with that name already exists.";
 
     @Autowired
@@ -81,6 +88,7 @@ class LibraryProvisioningIntegrationTest {
     private PasswordEncoder passwordEncoder;
 
     private String suffix;
+    private int firstAdmins;
     private Library ownLibrary;
     private User admin;
     private String adminToken;
@@ -136,8 +144,24 @@ class LibraryProvisioningIntegrationTest {
         return json(result).path("token").asText();
     }
 
-    private String nameJson(String name) {
-        return objectMapper.createObjectNode().put("name", name).toString();
+    /** A request for this name with a valid first administrator no other request uses. */
+    private ObjectNode libraryBody(String name) {
+        ObjectNode body = objectMapper.createObjectNode();
+        if (name != null) {
+            body.put("name", name);
+        }
+
+        String username = "step151-first-admin-" + suffix + "-" + (++firstAdmins);
+        body.putObject("admin")
+                .put("username", username)
+                .put("email", username + "@example.invalid")
+                .put("password", FIRST_ADMIN_PASSWORD);
+
+        return body;
+    }
+
+    private String libraryJson(String name) {
+        return libraryBody(name).toString();
     }
 
     private MvcResult createLibrary(String body, String token) throws Exception {
@@ -173,14 +197,14 @@ class LibraryProvisioningIntegrationTest {
         String name = "Step151 New Library " + suffix;
         long before = libraryRepository.count();
 
-        MvcResult result = createLibrary(nameJson("  " + name + "  "), adminToken);
+        MvcResult result = createLibrary(libraryJson("  " + name + "  "), adminToken);
 
         assertThat(status(result)).isEqualTo(201);
         JsonNode body = json(result);
 
         List<String> fields = new ArrayList<>();
         body.fieldNames().forEachRemaining(fields::add);
-        assertThat(fields).containsExactlyInAnyOrder("id", "name", "createdAt");
+        assertThat(fields).containsExactlyInAnyOrder("id", "name", "createdAt", "admin");
 
         assertThat(body.path("name").asText()).as("stored trimmed").isEqualTo(name);
         assertThat(body.path("createdAt").isTextual()).isTrue();
@@ -197,28 +221,27 @@ class LibraryProvisioningIntegrationTest {
         String name = prefix + "x".repeat(100 - prefix.length());
         assertThat(name).hasSize(100);
 
-        assertThat(status(createLibrary(nameJson(name), adminToken))).isEqualTo(201);
+        assertThat(status(createLibrary(libraryJson(name), adminToken))).isEqualTo(201);
     }
 
-    // ---------- the request cannot reach beyond a name ----------
+    // ---------- the request cannot reach beyond what it describes ----------
 
     @Test
     void theRequestCanNeitherChooseAnIdNorAttachItsCreator() throws Exception {
         assertThat(Arrays.stream(CreateLibraryRequest.class.getDeclaredFields()).map(Field::getName))
-                .as("a library is described by its name alone")
-                .containsExactly("name");
+                .as("a library is described by its name and its first administrator, nothing else")
+                .containsExactlyInAnyOrder("name", "admin");
 
         // An existing library's id: if it were honoured, saving would overwrite
         // that library instead of creating one.
         long existingId = ownLibrary.getId();
         String name = "Step151 Smuggled " + suffix;
-        String body = objectMapper.createObjectNode()
-                .put("name", name)
+        String body = libraryBody(name)
                 .put("id", existingId)
                 .put("libraryId", existingId)
                 .put("userId", admin.getId())
                 .put("adminId", admin.getId())
-                .put("role", "ROLE_ADMIN")
+                .put("role", "ROLE_MEMBER")
                 .toString();
 
         MvcResult result = createLibrary(body, adminToken);
@@ -243,11 +266,11 @@ class LibraryProvisioningIntegrationTest {
     @Test
     void aNameAlreadyInUseIsRefusedHoweverItIsTyped() throws Exception {
         String name = "Step151 Duplicate " + suffix;
-        assertThat(status(createLibrary(nameJson(name), adminToken))).isEqualTo(201);
+        assertThat(status(createLibrary(libraryJson(name), adminToken))).isEqualTo(201);
         long before = libraryRepository.count();
 
         for (String attempt : List.of(name, name.toUpperCase(Locale.ROOT), "   " + name + " ")) {
-            assertError(createLibrary(nameJson(attempt), adminToken), 400, DUPLICATE_MESSAGE);
+            assertError(createLibrary(libraryJson(attempt), adminToken), 400, DUPLICATE_MESSAGE);
         }
 
         assertThat(libraryRepository.count()).as("nothing was created").isEqualTo(before);
@@ -259,7 +282,7 @@ class LibraryProvisioningIntegrationTest {
         // against every library, not only the ones created here.
         long before = libraryRepository.count();
 
-        assertError(createLibrary(nameJson(ownLibrary.getName()), adminToken), 400, DUPLICATE_MESSAGE);
+        assertError(createLibrary(libraryJson(ownLibrary.getName()), adminToken), 400, DUPLICATE_MESSAGE);
 
         assertThat(libraryRepository.count()).isEqualTo(before);
     }
@@ -270,9 +293,9 @@ class LibraryProvisioningIntegrationTest {
     void aMissingBlankOrOverlongNameIsRefused() throws Exception {
         long before = libraryRepository.count();
 
-        assertError(createLibrary("{}", adminToken), 400, "Library name is required");
-        assertError(createLibrary(nameJson("   "), adminToken), 400, "Library name is required");
-        assertError(createLibrary(nameJson("x".repeat(101)), adminToken), 400,
+        assertError(createLibrary(libraryJson(null), adminToken), 400, "Library name is required");
+        assertError(createLibrary(libraryJson("   "), adminToken), 400, "Library name is required");
+        assertError(createLibrary(libraryJson("x".repeat(101)), adminToken), 400,
                 "Library name must not exceed 100 characters");
         assertError(createLibrary("{\"name\":", adminToken), 400,
                 "Request body could not be read. Check that it is valid JSON.");
@@ -289,7 +312,7 @@ class LibraryProvisioningIntegrationTest {
 
         MvcResult result = mockMvc.perform(post("/api/libraries")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(nameJson(name)))
+                        .content(libraryJson(name)))
                 .andReturn();
 
         assertError(result, 401, "Authentication required");
@@ -303,7 +326,7 @@ class LibraryProvisioningIntegrationTest {
         long before = libraryRepository.count();
 
         for (String token : List.of(memberToken, librarianToken)) {
-            assertError(createLibrary(nameJson(name), token), 403, "Access denied.");
+            assertError(createLibrary(libraryJson(name), token), 403, "Access denied.");
 
             // Every verb on the path is administrators only, not just POST: a
             // non-admin is refused before routing, so even an unmapped method
