@@ -116,6 +116,30 @@ public class TransactionController {
     }
 
     /**
+     * POST /api/transactions/{transactionId}/fine-payment - records that a
+     * returned loan's fine has been paid.
+     *
+     * <p>No body and no amount: the fine was fixed when the book came back, and
+     * a payment settles that fine rather than a figure the caller supplies.
+     * Nothing is charged here - there is no payment gateway - so this is a member
+     * of staff recording a payment taken at the desk, which is why the filter
+     * chain allows it to ADMIN and LIBRARIAN only.</p>
+     *
+     * <p>200 with the loan, now showing PAID. A loan in another library answers
+     * 404, like any loan the caller's library does not hold. A book still out, a
+     * fine already paid, or a loan that owes nothing answers 409: the request is
+     * well formed, but the loan's state will not allow it.</p>
+     */
+    @PostMapping("/{transactionId}/fine-payment")
+    public ResponseEntity<TransactionResponse> recordFinePayment(
+            @PathVariable @Positive(message = "Transaction id must be a positive number") Long transactionId,
+            Authentication authentication) {
+        TransactionResponse paid = transactionService.recordFinePayment(transactionId, authentication.getName());
+
+        return ResponseEntity.ok(paid);
+    }
+
+    /**
      * GET /api/transactions/{transactionId} - one loan by its id.
      *
      * <p>200 with the loan, or 404 if there is no such record. {@code @Positive}

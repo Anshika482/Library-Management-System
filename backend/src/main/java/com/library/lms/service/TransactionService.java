@@ -1,12 +1,16 @@
 package com.library.lms.service;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.TreeSet;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -17,6 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.library.lms.dto.PagedResponse;
 import com.library.lms.dto.TransactionResponse;
 import com.library.lms.entity.Book;
+import com.library.lms.entity.FinePaymentStatus;
 import com.library.lms.entity.Library;
 import com.library.lms.entity.Role;
 import com.library.lms.entity.Transaction;
@@ -24,6 +29,7 @@ import com.library.lms.entity.TransactionStatus;
 import com.library.lms.entity.User;
 import com.library.lms.exception.BookNotAvailableException;
 import com.library.lms.exception.BookNotFoundException;
+import com.library.lms.exception.FinePaymentNotAllowedException;
 import com.library.lms.exception.InvalidDueDateException;
 import com.library.lms.exception.InvalidPaginationException;
 import com.library.lms.exception.InvalidSortException;
@@ -49,6 +55,12 @@ import com.library.lms.repository.UserRepository;
  * reported however much later the loan is looked at. The rule, the rate and the
  * date all come from {@link OverduePolicy}.</p>
  *
+ * <p><b>Paying a fine is recorded, not processed.</b> There is no payment
+ * gateway, so {@link #recordFinePayment} stores a member of staff's statement
+ * that a fine was paid - which is why only staff may make it, only for a loan in
+ * their own library, only once, and only after the book is back and the fine has
+ * stopped growing.</p>
+ *
  * <p>Constructor injection with final fields, exactly as {@link BookService}
  * and {@link CategoryService} do.</p>
  *
@@ -61,6 +73,8 @@ import com.library.lms.repository.UserRepository;
  */
 @Service
 public class TransactionService {
+
+    private static final Logger log = LoggerFactory.getLogger(TransactionService.class);
 
     /**
      * The largest page a client may ask for.
@@ -290,6 +304,9 @@ public class TransactionService {
      * and two returns racing each other collide on the row's version: the second
      * fails instead of closing the loan again.</p>
      *
+     * <p>Payment is tracked from here: a fine owed starts UNPAID until staff
+     * record it paid, and a fine of zero is NOT_REQUIRED.</p>
+     *
      * <p>The loan is fetched within the caller's own library. Before that this
      * method took no authenticated name at all, so any staff member could close
      * any loan in the database and push a copy back onto another library's
@@ -362,11 +379,96 @@ public class TransactionService {
         // counted to.
         LocalDate returnDate = overduePolicy.today();
 
+        BigDecimal fine = overduePolicy.fineFor(transaction.getDueDate(), returnDate);
+
         transaction.setReturnDate(returnDate);
-        transaction.setFineAmount(overduePolicy.fineFor(transaction.getDueDate(), returnDate).doubleValue());
+        transaction.setFineAmount(fine.doubleValue());
+        transaction.setFinePaymentStatus(fine.signum() > 0 ? FinePaymentStatus.UNPAID : FinePaymentStatus.NOT_REQUIRED);
         transaction.setStatus(TransactionStatus.RETURNED);
 
         return toResponse(transactionRepository.save(transaction), returnDate);
+    }
+
+    /**
+     * Records that a returned loan's fine has been paid.
+     *
+     * <p><b>A record, not a payment.</b> No money moves through this
+     * application: there is no payment gateway. What this stores is a member of
+     * staff's statement that the fine was paid - at the desk, typically - with
+     * when they recorded it and who they are. Everything below follows from
+     * that.</p>
+     *
+     * <p><b>Staff only.</b> A member who could call this would clear their own
+     * fine just by saying so. The filter chain already refuses members on this
+     * path; the service refuses them as well, before reading anything, so the
+     * rule does not rest on one line of configuration.</p>
+     *
+     * <p><b>Only the caller's own library.</b> The loan is looked up within it,
+     * so a loan in another library is not found - the same 404 as an id that
+     * does not exist - and nothing about it is read or written.</p>
+     *
+     * <p><b>Only a fine that is final and owed, and only once.</b> A book still
+     * out has a fine that grows every day, so it cannot be settled yet. A fine
+     * already PAID, or one that came to nothing, is refused and left exactly as
+     * it was, so a repeated request cannot record a second payment or overwrite
+     * who recorded the first. Two requests racing each other collide on the
+     * row's version: the second fails rather than paying twice.</p>
+     *
+     * <p>The fine amount is never changed. A loan returned before payments were
+     * tracked has no stored payment state; its fine decides whether anything is
+     * owed, exactly as it does when the loan is read.</p>
+     *
+     * @param transactionId         the loan whose fine was paid
+     * @param authenticatedUsername the member of staff recording it, taken from
+     *                              the authenticated principal
+     * @return the loan, with its fine now PAID
+     * @throws UserNotFoundException            if the authenticated name matches
+     *                                          no account
+     * @throws TransactionAccessDeniedException if the caller is not staff
+     * @throws TransactionNotFoundException     if the caller's library has no
+     *                                          loan with this id
+     * @throws FinePaymentNotAllowedException   if the book is still out, the fine
+     *                                          is already paid, or nothing is owed
+     */
+    @Transactional
+    public TransactionResponse recordFinePayment(Long transactionId, String authenticatedUsername) {
+        User staff = authenticatedUser(authenticatedUsername);
+
+        if (!maySeeAnyUsersActivity(staff)) {
+            throw new TransactionAccessDeniedException();
+        }
+
+        Transaction transaction = transactionRepository
+                .findByIdAndLibraryId(transactionId, staff.getLibrary().getId())
+                .orElseThrow(() -> new TransactionNotFoundException(transactionId));
+
+        if (overduePolicy.isOpen(transaction.getStatus())) {
+            throw FinePaymentNotAllowedException.bookStillOut();
+        }
+
+        FinePaymentStatus current = transaction.getFinePaymentStatus() != null
+                ? transaction.getFinePaymentStatus()
+                : paymentStatusFor(transaction.getFineAmount());
+
+        if (current == FinePaymentStatus.PAID) {
+            throw FinePaymentNotAllowedException.alreadyPaid();
+        }
+        if (current != FinePaymentStatus.UNPAID) {
+            throw FinePaymentNotAllowedException.nothingOwed();
+        }
+
+        transaction.setFinePaymentStatus(FinePaymentStatus.PAID);
+        transaction.setFinePaidAt(LocalDateTime.now());
+        transaction.setFinePaymentRecordedBy(staff);
+
+        Transaction saved = transactionRepository.save(transaction);
+
+        // Who said the fine was paid, for which loan, and how much. With no
+        // gateway behind it, this line and the row are the whole audit trail.
+        log.info("Fine payment recorded by username='{}': transaction id={} amount={} library id={}",
+                staff.getUsername(), saved.getId(), saved.getFineAmount(), staff.getLibrary().getId());
+
+        return toResponse(saved, overduePolicy.today());
     }
 
     /**
@@ -780,10 +882,17 @@ public class TransactionService {
      * until then. The caller passes the date, so every loan in one response - and
      * the query that selected them - is judged by the same day. A returned loan
      * is described exactly as stored, fine included.</p>
+     *
+     * <p>The fine's payment state follows the same split. An open loan's is
+     * worked out from the fine so far - UNPAID once something is owed, though it
+     * cannot be paid until the book is back. A returned loan's is what was
+     * stored, or, for a loan returned before payments were tracked, what its
+     * stored fine implies.</p>
      */
     private TransactionResponse toResponse(Transaction transaction, LocalDate today) {
         TransactionStatus status = transaction.getStatus();
         Double fineAmount = transaction.getFineAmount();
+        FinePaymentStatus finePaymentStatus = transaction.getFinePaymentStatus();
 
         // Worked out here and never written, so reading a loan any number of
         // times cannot change it.
@@ -792,6 +901,9 @@ public class TransactionService {
 
             status = overdue ? TransactionStatus.OVERDUE : TransactionStatus.ISSUED;
             fineAmount = overdue ? overduePolicy.fineFor(transaction.getDueDate(), today).doubleValue() : null;
+            finePaymentStatus = paymentStatusFor(fineAmount);
+        } else if (finePaymentStatus == null) {
+            finePaymentStatus = paymentStatusFor(fineAmount);
         }
 
         return new TransactionResponse(
@@ -802,6 +914,21 @@ public class TransactionService {
                 transaction.getDueDate(),
                 transaction.getReturnDate(),
                 fineAmount,
-                status);
+                status,
+                finePaymentStatus,
+                transaction.getFinePaidAt());
+    }
+
+    /**
+     * The payment state a fine implies when none has been recorded: UNPAID if
+     * something is owed, NOT_REQUIRED if it came to nothing, and null when there
+     * is no fine at all.
+     */
+    private static FinePaymentStatus paymentStatusFor(Double fineAmount) {
+        if (fineAmount == null) {
+            return null;
+        }
+
+        return fineAmount > 0 ? FinePaymentStatus.UNPAID : FinePaymentStatus.NOT_REQUIRED;
     }
 }

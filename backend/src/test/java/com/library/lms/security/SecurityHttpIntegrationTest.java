@@ -231,6 +231,7 @@ class SecurityHttpIntegrationTest {
                 delete("/api/categories/999999"),
                 post("/api/transactions/issue").contentType(MediaType.APPLICATION_JSON).content(issueJson),
                 post("/api/transactions/999999/return"),
+                post("/api/transactions/999999/fine-payment"),
                 get("/api/transactions/book/999999"),
                 get("/api/transactions/status/ISSUED"));
     }

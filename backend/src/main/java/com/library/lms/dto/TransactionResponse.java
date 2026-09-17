@@ -1,7 +1,9 @@
 package com.library.lms.dto;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 
+import com.library.lms.entity.FinePaymentStatus;
 import com.library.lms.entity.TransactionStatus;
 
 import lombok.AllArgsConstructor;
@@ -63,4 +65,16 @@ public class TransactionResponse {
     private Double fineAmount;
 
     private TransactionStatus status;
+
+    /**
+     * Whether the fine has been settled. UNPAID while something is owed - on an
+     * open loan it is still growing and cannot be paid until the book is back -
+     * PAID once staff have recorded a payment, and NOT_REQUIRED when the fine
+     * came to nothing. Null when there is no fine: an open loan not yet overdue,
+     * or a loan returned before fines were calculated.
+     */
+    private FinePaymentStatus finePaymentStatus;
+
+    /** When staff recorded the payment. Null until they have. */
+    private LocalDateTime finePaidAt;
 }

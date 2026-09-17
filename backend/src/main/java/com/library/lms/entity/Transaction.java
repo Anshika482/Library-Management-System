@@ -1,6 +1,7 @@
 package com.library.lms.entity;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -153,6 +154,39 @@ public class Transaction {
      */
     @Column(name = "fine_amount")
     private Double fineAmount;
+
+    /**
+     * Whether the fine has been paid, tracked apart from how much it is.
+     *
+     * <p>Set when the book comes back - UNPAID if a fine is owed, NOT_REQUIRED
+     * if it came to nothing - and changed to PAID when staff record a payment.
+     * Recording a payment never changes {@link #fineAmount}.</p>
+     *
+     * <p>Null while the book is out, because an open loan's fine is still
+     * growing and cannot be settled yet, and null for a loan returned before
+     * payments were tracked; for both, the payment state is worked out from the
+     * fine when the loan is read.</p>
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "fine_payment_status")
+    private FinePaymentStatus finePaymentStatus;
+
+    /** When the payment was recorded. Null until it is. */
+    @Column(name = "fine_paid_at")
+    private LocalDateTime finePaidAt;
+
+    /**
+     * The member of staff who recorded the payment.
+     *
+     * <p>There is no payment gateway, so a recorded payment is someone's word
+     * that money was received; this keeps whose word it was. LAZY, no cascade,
+     * and excluded from {@code toString()} for the same reasons as
+     * {@link #user}.</p>
+     */
+    @ToString.Exclude
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "fine_payment_recorded_by")
+    private User finePaymentRecordedBy;
 
     /**
      * Where this borrowing has got to.

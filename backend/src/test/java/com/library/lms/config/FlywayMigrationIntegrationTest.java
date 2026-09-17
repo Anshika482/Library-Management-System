@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.Statement;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -33,6 +34,7 @@ import org.springframework.test.context.DynamicPropertySource;
 
 import com.library.lms.entity.Book;
 import com.library.lms.entity.Category;
+import com.library.lms.entity.FinePaymentStatus;
 import com.library.lms.entity.Library;
 import com.library.lms.entity.Role;
 import com.library.lms.entity.Transaction;
@@ -162,15 +164,17 @@ class FlywayMigrationIntegrationTest {
     // ---------- the migration ran, from nothing ----------
 
     @Test
-    void flywayBuiltTheSchemaFromNothingWithTheInitialMigration() {
+    void flywayBuiltTheSchemaFromNothingWithEveryMigration() {
         List<String> history = jdbcTemplate.query(
                 "SELECT version, description, type, success FROM flyway_schema_history ORDER BY installed_rank",
                 (row, n) -> row.getString(1) + " | " + row.getString(2) + " | " + row.getString(3)
                         + " | " + row.getBoolean(4));
 
         assertThat(history)
-                .as("exactly one migration, applied on this run to an empty schema")
-                .containsExactly("1 | initial schema | SQL | true");
+                .as("every migration, in order, applied on this run to an empty schema")
+                .containsExactly(
+                        "1 | initial schema | SQL | true",
+                        "2 | fine payment tracking | SQL | true");
 
         assertThat(jdbcTemplate.queryForList(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = ? ORDER BY table_name",
@@ -242,6 +246,8 @@ class FlywayMigrationIntegrationTest {
         // checks which values exist, and their order is pinned here instead.
         assertThat(columnType(MIGRATED, "transactions", "status")).isEqualTo(enumOf(TransactionStatus.values()));
         assertThat(columnType(MIGRATED, "users", "role")).isEqualTo(enumOf(Role.values()));
+        assertThat(columnType(MIGRATED, "transactions", "fine_payment_status"))
+                .isEqualTo(enumOf(FinePaymentStatus.values()));
     }
 
     // ---------- and the application can use it ----------
@@ -283,6 +289,11 @@ class FlywayMigrationIntegrationTest {
         loan.setDueDate(LocalDate.of(2026, 9, 15));
         loan.setFineAmount(12.5);
         loan.setStatus(TransactionStatus.OVERDUE);
+        // Any account serves to prove the column maps; in the application only
+        // staff record payments.
+        loan.setFinePaymentStatus(FinePaymentStatus.PAID);
+        loan.setFinePaidAt(LocalDateTime.of(2026, 9, 20, 10, 30));
+        loan.setFinePaymentRecordedBy(member);
         loan = transactionRepository.save(loan);
 
         User storedMember = userRepository.findById(member.getId()).orElseThrow();
@@ -312,6 +323,9 @@ class FlywayMigrationIntegrationTest {
         assertThat(storedLoan.getBook().getId()).isEqualTo(book.getId());
         assertThat(storedLoan.getUser().getId()).isEqualTo(member.getId());
         assertThat(storedLoan.getLibrary().getId()).isEqualTo(library.getId());
+        assertThat(storedLoan.getFinePaymentStatus()).isEqualTo(FinePaymentStatus.PAID);
+        assertThat(storedLoan.getFinePaidAt()).isEqualTo(LocalDateTime.of(2026, 9, 20, 10, 30));
+        assertThat(storedLoan.getFinePaymentRecordedBy().getId()).isEqualTo(member.getId());
     }
 
     // ---------- helpers ----------

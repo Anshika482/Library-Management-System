@@ -214,7 +214,8 @@ class AccessDeniedHandlerIntegrationTest {
                 post("/api/categories").contentType(MediaType.APPLICATION_JSON).content("{}"),
                 delete("/api/categories/999999"),
                 post("/api/transactions/issue").contentType(MediaType.APPLICATION_JSON).content("{}"),
-                post("/api/transactions/999999/return"));
+                post("/api/transactions/999999/return"),
+                post("/api/transactions/999999/fine-payment"));
     }
 
     // ---------- A: the new 403 ----------

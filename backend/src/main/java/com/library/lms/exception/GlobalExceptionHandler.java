@@ -493,6 +493,24 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handles a fine payment the loan's state will not allow.
+     *
+     * <p><b>409 CONFLICT</b>, the same reasoning as a refused return: the request
+     * is valid and the loan exists, but the book is still out, the fine is
+     * already paid, or nothing is owed. The message is the exception's fixed
+     * sentence for that case.</p>
+     */
+    @ExceptionHandler(FinePaymentNotAllowedException.class)
+    public ResponseEntity<ErrorResponse> handleFinePaymentNotAllowed(FinePaymentNotAllowedException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.CONFLICT.value(),
+                exception.getMessage(),
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(errorResponse);
+    }
+
+    /**
      * Handles an attempt to return a book that cannot be returned.
      *
      * <p><b>409 CONFLICT</b>. Not a 400 - the request is valid. Not a 404 - the

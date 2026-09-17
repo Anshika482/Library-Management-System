@@ -196,6 +196,12 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/transactions/issue").hasAnyAuthority(ADMIN, LIBRARIAN)
                         .requestMatchers(HttpMethod.POST, "/api/transactions/*/return").hasAnyAuthority(ADMIN, LIBRARIAN)
 
+                        // Recording a fine as paid is staff work. There is no payment
+                        // gateway, so a member who could do it would clear their own
+                        // fine just by saying so. No method named, so every verb on
+                        // the path is covered.
+                        .requestMatchers("/api/transactions/*/fine-payment").hasAnyAuthority(ADMIN, LIBRARIAN)
+
                         .requestMatchers(HttpMethod.GET, "/api/books/**").authenticated()
                         .requestMatchers(HttpMethod.GET, "/api/categories/**").authenticated()
                         // No HTTP method on these two, deliberately. A GET-only rule does
