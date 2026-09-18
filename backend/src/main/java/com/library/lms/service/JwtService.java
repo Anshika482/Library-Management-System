@@ -26,9 +26,11 @@ import io.jsonwebtoken.security.Keys;
  * token it issued earlier without keeping any session state to check it
  * against.</p>
  *
- * <p>This class only creates tokens. Reading one back, deciding whether it is
- * still valid and letting it authenticate a request are separate concerns and
- * are not implemented here; nothing calls this service yet.</p>
+ * <p>This class both mints tokens and reads them back - {@link #generateToken}
+ * and {@link #extractUsername}. What a valid token may then do is a separate
+ * concern: the JWT filter authenticates the request with the account the token
+ * names, and the security configuration decides what that account may
+ * reach.</p>
  */
 @Service
 public class JwtService {

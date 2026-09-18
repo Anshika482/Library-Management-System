@@ -30,9 +30,10 @@ import jakarta.validation.Valid;
  * password.
  *
  * <p><b>Two tokens.</b> Login returns an access token - a signed JWT, sent as a
- * Bearer header and valid for an hour - and a refresh token, an opaque random
- * value that is exchanged for a new pair once the access token has expired. The
- * server keeps only a hash of the refresh token; see
+ * Bearer header and valid for an hour by default, or for however long
+ * {@code JWT_ACCESS_TOKEN_VALIDITY} says - and a refresh token, an opaque
+ * random value that is exchanged for a new pair once the access token has
+ * expired. The server keeps only a hash of the refresh token; see
  * {@link RefreshTokenService}.</p>
  */
 @RestController
@@ -240,7 +241,8 @@ public class AuthController {
      *
      * <p>The access token already issued is not revoked. It is self-contained
      * and checked without a database lookup, so it stays valid until it
-     * expires - at most an hour. A client discards it when it logs out.</p>
+     * expires - at most its configured lifetime after it was minted, an hour by
+     * default. A client discards it when it logs out.</p>
      *
      * @param request the refresh token of the session to end
      * @return 204
