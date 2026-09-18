@@ -30,23 +30,26 @@ class RefreshTokenServiceTest {
 
     private final UserRepository users = mock(UserRepository.class);
 
+    /** Comfortably longer than every session lifetime below, so only the lifetime is under test. */
+    private static final Duration TEST_RETENTION = Duration.ofDays(30);
+
     @ParameterizedTest
     @ValueSource(strings = {"PT0S", "-PT1H", "-P7D"})
     void aSessionLifetimeThatIsNotPositiveStopsStartup(String lifetime) {
-        assertThatThrownBy(() -> new RefreshTokenService(tokens, users, Duration.parse(lifetime)))
+        assertThatThrownBy(() -> new RefreshTokenService(tokens, users, Duration.parse(lifetime), TEST_RETENTION))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining(RefreshTokenService.VALIDITY_PROPERTY);
     }
 
     @Test
     void aMissingSessionLifetimeStopsStartup() {
-        assertThatThrownBy(() -> new RefreshTokenService(tokens, users, null))
+        assertThatThrownBy(() -> new RefreshTokenService(tokens, users, null, TEST_RETENTION))
                 .isInstanceOf(IllegalStateException.class);
     }
 
     @Test
     void tokensAre256RandomBitsInUrlSafeText() {
-        RefreshTokenService service = new RefreshTokenService(tokens, users, Duration.ofDays(7));
+        RefreshTokenService service = new RefreshTokenService(tokens, users, Duration.ofDays(7), TEST_RETENTION);
         Set<String> seen = new HashSet<>();
 
         for (int i = 0; i < 200; i++) {
@@ -63,7 +66,7 @@ class RefreshTokenServiceTest {
         assertThat(RefreshTokenService.hash("abc"))
                 .isEqualTo("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
 
-        String token = new RefreshTokenService(tokens, users, Duration.ofDays(7)).newToken();
+        String token = new RefreshTokenService(tokens, users, Duration.ofDays(7), TEST_RETENTION).newToken();
         assertThat(RefreshTokenService.hash(token))
                 .matches("[0-9a-f]{64}")
                 .isEqualTo(RefreshTokenService.hash(token))

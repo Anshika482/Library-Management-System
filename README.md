@@ -128,6 +128,8 @@ rate or refresh-token lifetime are invalid. The production profile also refuses 
 | `FINE_DAILY_RATE` | no | `1.00` | Fine per overdue day; zero or more, at most two decimals |
 | `JWT_ACCESS_TOKEN_VALIDITY` | no | `PT1H` | Access-token lifetime, as an ISO-8601 duration |
 | `JWT_REFRESH_TOKEN_VALIDITY` | no | `P7D` | Login session lifetime, as an ISO-8601 duration |
+| `JWT_REFRESH_TOKEN_RETENTION` | no | `P30D` | How long ended sessions are kept; at least the session lifetime |
+| `JWT_REFRESH_TOKEN_CLEANUP_INTERVAL` | no | `PT1H` | How often ended sessions are swept away |
 
 `backend/.env.example` lists them all with placeholders. Copy it to `backend/.env`, which git ignores, and fill it in;
 never commit real values.
@@ -222,7 +224,10 @@ components or details. No other Actuator endpoint is exposed.
 - A failed login answers 401 `Invalid username or password` whatever the reason; five consecutive failures block the
   username for fifteen minutes.
 - A refused refresh answers 401 `Invalid or expired refresh token.` whatever the reason.
-- The server stores only a SHA-256 hash of each refresh token.
+- The server stores only a SHA-256 hash of each refresh token. A session's rows are kept for
+  `JWT_REFRESH_TOKEN_RETENTION` after it ends - that is what keeps reuse of an old token recognisable -
+  and a sweep every `JWT_REFRESH_TOKEN_CLEANUP_INTERVAL` removes the ones past it. A session that is
+  still running is never touched.
 - Login, refresh, logout and the health probes are the only endpoints open without a token.
 
 ## Endpoints
@@ -299,7 +304,8 @@ on GitHub.
   multiply the limit.
 - **Access tokens** last one hour by default, configurable through `JWT_ACCESS_TOKEN_VALIDITY`, and are not
   revoked before they expire, even by logout or a password change.
-- **Refresh-token records** are kept after they expire or are revoked; nothing purges them.
+- **Refresh-token records** outlive their session by `JWT_REFRESH_TOKEN_RETENTION`, so that reuse of an old
+  token is still recognised, and are then swept away. Every instance runs the sweep.
 - **Fine payments** are recorded by staff; there is no payment gateway.
 - **Libraries** can be registered by any administrator.
 - **Dates and times** in API responses carry no offset, and one business time zone applies to every library.

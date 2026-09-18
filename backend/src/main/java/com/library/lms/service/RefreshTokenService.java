@@ -16,6 +16,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -51,13 +52,31 @@ import com.library.lms.repository.UserRepository;
  * account cannot refresh, and its session is revoked, so restoring the account
  * does not bring an old session back.</p>
  *
- * <p><b>Nothing here logs a token or a hash</b> - only account ids, and what
- * happened.</p>
+ * <p><b>Rows outlive their session.</b> A revoked or expired row is what makes
+ * reuse of an old token recognisable, so rows are kept for
+ * {@code security.refresh-token.retention} after the session ended and only
+ * then swept away by {@link #purgeExpiredSessions()}.</p>
+ *
+ * <p><b>Nothing here logs a token or a hash</b> - only account ids, counts, and
+ * what happened.</p>
  */
 @Service
 public class RefreshTokenService {
 
     static final String VALIDITY_PROPERTY = "security.refresh-token.validity";
+
+    static final String RETENTION_PROPERTY = "security.refresh-token.retention";
+
+    static final String CLEANUP_INTERVAL_PROPERTY = "security.refresh-token.cleanup-interval";
+
+    /** Rows removed per statement, so no single transaction locks a whole backlog. */
+    static final int PURGE_BATCH_SIZE = 1_000;
+
+    /** Batches per run. A backlog larger than this is cleared over several runs. */
+    static final int PURGE_MAX_BATCHES = 50;
+
+    /** Long enough that startup and the first readiness checks are over before the first sweep. */
+    static final String PURGE_INITIAL_DELAY = "PT5M";
 
     /** 256 bits. */
     private static final int TOKEN_BYTES = 32;
@@ -85,6 +104,8 @@ public class RefreshTokenService {
 
     private final Duration validity;
 
+    private final Duration retention;
+
     private final Clock clock;
 
     private final SecureRandom secureRandom = new SecureRandom();
@@ -92,25 +113,45 @@ public class RefreshTokenService {
     /**
      * The service the application runs with, on the system clock.
      *
-     * @param validity how long a session lasts from login
-     * @throws IllegalStateException if the lifetime is missing, zero or negative
+     * @param validity  how long a session lasts from login
+     * @param retention how long a session's rows are kept after it has ended
+     * @throws IllegalStateException if either duration is missing, zero or
+     *                               negative, or if retention is shorter than
+     *                               validity
      */
     @Autowired
     public RefreshTokenService(RefreshTokenRepository refreshTokenRepository, UserRepository userRepository,
-            @Value("${" + VALIDITY_PROPERTY + "}") Duration validity) {
-        this(refreshTokenRepository, userRepository, validity, Clock.systemDefaultZone());
+            @Value("${" + VALIDITY_PROPERTY + "}") Duration validity,
+            @Value("${" + RETENTION_PROPERTY + "}") Duration retention) {
+        this(refreshTokenRepository, userRepository, validity, retention, Clock.systemDefaultZone());
     }
 
     RefreshTokenService(RefreshTokenRepository refreshTokenRepository, UserRepository userRepository,
-            Duration validity, Clock clock) {
+            Duration validity, Duration retention, Clock clock) {
         if (validity == null || validity.isZero() || validity.isNegative()) {
             throw new IllegalStateException(VALIDITY_PROPERTY + " must be a positive duration, such as P7D."
                     + " Set JWT_REFRESH_TOKEN_VALIDITY, or leave it unset for the default.");
         }
 
+        if (retention == null || retention.isZero() || retention.isNegative()) {
+            throw new IllegalStateException(RETENTION_PROPERTY + " must be a positive duration, such as P30D."
+                    + " Set JWT_REFRESH_TOKEN_RETENTION, or leave it unset for the default.");
+        }
+
+        // Reuse of an old token is recognised only while its row is still
+        // there. Keeping rows for less time than a session lasts would delete
+        // that evidence out from under a session that is still running.
+        if (retention.compareTo(validity) < 0) {
+            throw new IllegalStateException(RETENTION_PROPERTY + " (" + retention + ") must be at least "
+                    + VALIDITY_PROPERTY + " (" + validity + "), so a reused token is still recognised for as long"
+                    + " as a session can last. Raise JWT_REFRESH_TOKEN_RETENTION or lower"
+                    + " JWT_REFRESH_TOKEN_VALIDITY.");
+        }
+
         this.refreshTokenRepository = refreshTokenRepository;
         this.userRepository = userRepository;
         this.validity = validity;
+        this.retention = retention;
         this.clock = clock;
     }
 
@@ -235,6 +276,53 @@ public class RefreshTokenService {
         stored.setExpiresAt(expiresAt);
 
         refreshTokenRepository.save(stored);
+    }
+
+    /**
+     * Removes the rows of sessions that ended longer ago than the retention
+     * period.
+     *
+     * <p><b>A live session is never touched.</b> The condition is the session's
+     * end - {@code expires_at} - which is in the future for every token that
+     * still works, so nothing this sweep deletes could have been presented
+     * successfully. Revocation is deliberately not part of the condition: a
+     * token revoked at logout belongs to a session that may still be running,
+     * and its row is what makes presenting that token again recognisable as
+     * reuse rather than as an unknown token.</p>
+     *
+     * <p><b>Not one transaction.</b> Each batch is its own, so a first sweep
+     * over a long backlog cannot hold a huge number of row locks. A backlog
+     * larger than {@link #PURGE_MAX_BATCHES} batches is left for the next run
+     * rather than chased to the end.</p>
+     *
+     * <p>Every instance runs this; deleting the same expired rows twice is
+     * harmless, so no coordination is needed. Only counts are logged - never a
+     * token, a hash or an account.</p>
+     *
+     * @return how many rows were removed
+     */
+    @Scheduled(initialDelayString = PURGE_INITIAL_DELAY, fixedDelayString = "${" + CLEANUP_INTERVAL_PROPERTY + "}")
+    public int purgeExpiredSessions() {
+        LocalDateTime cutoff = now().minus(retention);
+        int removed = 0;
+
+        for (int batch = 0; batch < PURGE_MAX_BATCHES; batch++) {
+            int deleted = refreshTokenRepository.deleteExpiredBefore(cutoff, PURGE_BATCH_SIZE);
+            removed += deleted;
+
+            if (deleted < PURGE_BATCH_SIZE) {
+                if (removed > 0) {
+                    log.info("Purged {} refresh token row(s) of sessions that ended before the retention cutoff",
+                            removed);
+                }
+
+                return removed;
+            }
+        }
+
+        log.warn("Purged {} refresh token row(s) and stopped at the per-run cap; the next run continues", removed);
+
+        return removed;
     }
 
     private LocalDateTime now() {
