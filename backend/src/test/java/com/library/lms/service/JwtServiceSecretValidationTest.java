@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.time.Duration;
+
 import org.junit.jupiter.api.Test;
 
 /**
@@ -39,6 +41,9 @@ class JwtServiceSecretValidationTest {
 
     private static final String AUDIENCE = "secret-validation-test-audience";
 
+    /** An ordinary lifetime, so these tests exercise everything but the validity check. */
+    private static final Duration TEST_VALIDITY = Duration.ofHours(1);
+
     /**
      * The development placeholder that {@code application.properties} used to
      * carry as the fallback for {@code JWT_SECRET}.
@@ -58,7 +63,7 @@ class JwtServiceSecretValidationTest {
 
     @Test
     void theRetiredDevelopmentPlaceholderIsRefused() {
-        assertThatThrownBy(() -> new JwtService(RETIRED_PLACEHOLDER, ISSUER, AUDIENCE))
+        assertThatThrownBy(() -> new JwtService(RETIRED_PLACEHOLDER, ISSUER, AUDIENCE, TEST_VALIDITY))
                 .as("the signing key published in this repository must not start the application")
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("placeholder");
@@ -80,21 +85,21 @@ class JwtServiceSecretValidationTest {
     void anEmptySecretIsRefused() {
         // JWT_SECRET= in the environment. The ${JWT_SECRET} placeholder
         // resolves happily to an empty string, so only this check stops it.
-        assertThatThrownBy(() -> new JwtService("", ISSUER, AUDIENCE))
+        assertThatThrownBy(() -> new JwtService("", ISSUER, AUDIENCE, TEST_VALIDITY))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("blank");
     }
 
     @Test
     void aWhitespaceOnlySecretIsRefused() {
-        assertThatThrownBy(() -> new JwtService("    ", ISSUER, AUDIENCE))
+        assertThatThrownBy(() -> new JwtService("    ", ISSUER, AUDIENCE, TEST_VALIDITY))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("blank");
     }
 
     @Test
     void aNullSecretIsRefused() {
-        assertThatThrownBy(() -> new JwtService(null, ISSUER, AUDIENCE))
+        assertThatThrownBy(() -> new JwtService(null, ISSUER, AUDIENCE, TEST_VALIDITY))
                 .as("a clear startup message, not a NullPointerException")
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("blank");
@@ -104,7 +109,7 @@ class JwtServiceSecretValidationTest {
 
     @Test
     void aSecretShorterThanHs256RequiresIsStillRefused() {
-        assertThatThrownBy(() -> new JwtService("far-too-short", ISSUER, AUDIENCE))
+        assertThatThrownBy(() -> new JwtService("far-too-short", ISSUER, AUDIENCE, TEST_VALIDITY))
                 .as("the original length check must survive the new ones")
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("too short");
@@ -117,14 +122,16 @@ class JwtServiceSecretValidationTest {
         String exactlyThirtyTwo = "0123456789abcdef0123456789abcdef";
 
         assertThat(exactlyThirtyTwo.length()).isEqualTo(32);
-        assertThatCode(() -> new JwtService(exactlyThirtyTwo, ISSUER, AUDIENCE)).doesNotThrowAnyException();
+        assertThatCode(() -> new JwtService(exactlyThirtyTwo, ISSUER, AUDIENCE, TEST_VALIDITY))
+                .doesNotThrowAnyException();
     }
 
     // ---------- the happy path still works ----------
 
     @Test
     void anAcceptableSecretBuildsTheService() {
-        assertThatCode(() -> new JwtService(ACCEPTABLE_SECRET, ISSUER, AUDIENCE)).doesNotThrowAnyException();
+        assertThatCode(() -> new JwtService(ACCEPTABLE_SECRET, ISSUER, AUDIENCE, TEST_VALIDITY))
+                .doesNotThrowAnyException();
     }
 
     // ---------- nothing leaks ----------
@@ -135,10 +142,10 @@ class JwtServiceSecretValidationTest {
         // message that echoed the value would put the rejected secret - which
         // on a misconfigured deployment may well be a real one from the wrong
         // environment - into that file.
-        assertThatThrownBy(() -> new JwtService(RETIRED_PLACEHOLDER, ISSUER, AUDIENCE))
+        assertThatThrownBy(() -> new JwtService(RETIRED_PLACEHOLDER, ISSUER, AUDIENCE, TEST_VALIDITY))
                 .hasMessageNotContaining(RETIRED_PLACEHOLDER);
 
-        assertThatThrownBy(() -> new JwtService("far-too-short", ISSUER, AUDIENCE))
+        assertThatThrownBy(() -> new JwtService("far-too-short", ISSUER, AUDIENCE, TEST_VALIDITY))
                 .hasMessageNotContaining("far-too-short");
     }
 }

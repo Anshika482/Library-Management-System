@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Date;
@@ -44,6 +45,9 @@ class JwtServiceTest {
 
     private static final String TEST_AUDIENCE = "jwt-service-test-audience";
 
+    /** An ordinary lifetime, so these tests exercise everything but the validity check. */
+    private static final Duration TEST_VALIDITY = Duration.ofHours(1);
+
     private static final SecretKey TEST_KEY =
             Keys.hmacShaKeyFor(TEST_SECRET.getBytes(StandardCharsets.UTF_8));
 
@@ -51,7 +55,7 @@ class JwtServiceTest {
 
     private static final String TEST_AUTHORITY = "ROLE_MEMBER";
 
-    private final JwtService jwtService = new JwtService(TEST_SECRET, TEST_ISSUER, TEST_AUDIENCE);
+    private final JwtService jwtService = new JwtService(TEST_SECRET, TEST_ISSUER, TEST_AUDIENCE, TEST_VALIDITY);
 
     private static UserDetails testUser() {
         return User.withUsername(TEST_USERNAME)

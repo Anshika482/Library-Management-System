@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Date;
@@ -55,9 +56,12 @@ class JwtServiceIssuerAudienceTest {
 
     private static final String AUDIENCE = "issuer-audience-test-audience";
 
+    /** An ordinary lifetime, so these tests exercise everything but the validity check. */
+    private static final Duration TEST_VALIDITY = Duration.ofHours(1);
+
     private static final String USERNAME = "issuer-audience-user";
 
-    private final JwtService jwtService = new JwtService(SECRET, ISSUER, AUDIENCE);
+    private final JwtService jwtService = new JwtService(SECRET, ISSUER, AUDIENCE, TEST_VALIDITY);
 
     private static UserDetails user() {
         return User.withUsername(USERNAME)
@@ -151,7 +155,7 @@ class JwtServiceIssuerAudienceTest {
     void aTokenFromAnotherDeploymentSharingTheKeyIsRejected() {
         // The scenario the two claims exist for. Same key, so the signature
         // verifies; different names, so the token is still refused.
-        JwtService otherDeployment = new JwtService(SECRET, "another-deployment", "another-api");
+        JwtService otherDeployment = new JwtService(SECRET, "another-deployment", "another-api", TEST_VALIDITY);
         String theirs = otherDeployment.generateToken(user());
 
         assertThat(otherDeployment.extractUsername(theirs))
@@ -168,7 +172,7 @@ class JwtServiceIssuerAudienceTest {
     @NullSource
     @ValueSource(strings = {"", "   "})
     void aBlankIssuerStopsTheServiceFromBeingBuilt(String issuer) {
-        assertThatThrownBy(() -> new JwtService(SECRET, issuer, AUDIENCE))
+        assertThatThrownBy(() -> new JwtService(SECRET, issuer, AUDIENCE, TEST_VALIDITY))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("JWT_ISSUER");
     }
@@ -177,7 +181,7 @@ class JwtServiceIssuerAudienceTest {
     @NullSource
     @ValueSource(strings = {"", "   "})
     void aBlankAudienceStopsTheServiceFromBeingBuilt(String audience) {
-        assertThatThrownBy(() -> new JwtService(SECRET, ISSUER, audience))
+        assertThatThrownBy(() -> new JwtService(SECRET, ISSUER, audience, TEST_VALIDITY))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("JWT_AUDIENCE");
     }

@@ -126,14 +126,16 @@ rate or refresh-token lifetime are invalid. The production profile also refuses 
 | `APP_TIME_ZONE` | no | `Asia/Kolkata` | Business time zone; the JVM must run in it |
 | `CORS_ALLOWED_ORIGINS` | no | empty - none | Comma-separated exact browser origins |
 | `FINE_DAILY_RATE` | no | `1.00` | Fine per overdue day; zero or more, at most two decimals |
+| `JWT_ACCESS_TOKEN_VALIDITY` | no | `PT1H` | Access-token lifetime, as an ISO-8601 duration |
 | `JWT_REFRESH_TOKEN_VALIDITY` | no | `P7D` | Login session lifetime, as an ISO-8601 duration |
 
 `backend/.env.example` lists them all with placeholders. Copy it to `backend/.env`, which git ignores, and fill it in;
 never commit real values.
 
-No dedicated environment variable: access tokens last one hour, fixed in code, and five consecutive failed logins block
-a username for fifteen minutes. The login limit comes from the `security.login.*` properties, which can still be
-overridden through Spring's environment-variable binding - for example `SECURITY_LOGIN_MAX_FAILED_ATTEMPTS`.
+Access tokens last one hour by default, set by `JWT_ACCESS_TOKEN_VALIDITY` above. Five consecutive failed logins block
+a username for fifteen minutes; that limit has no dedicated environment variable, but the `security.login.*` properties
+behind it can still be overridden through Spring's environment-variable binding - for example
+`SECURITY_LOGIN_MAX_FAILED_ATTEMPTS`.
 
 ## Database and Flyway
 
@@ -204,16 +206,16 @@ components or details. No other Actuator endpoint is exposed.
 ## Authentication
 
 1. **Log in** - `POST /api/auth/login` with `{"username", "password"}` returns `{"token", "refreshToken"}`.
-2. **Call the API** - send `Authorization: Bearer <token>`. The access token is a JWT valid for one hour. The
-   account's role, library and status are read from the database on every request, so a disabled or locked account is
-   refused even with a token that has not expired.
+2. **Call the API** - send `Authorization: Bearer <token>`. The access token is a JWT valid for one hour by
+   default, or for whatever `JWT_ACCESS_TOKEN_VALIDITY` says. The account's role, library and status are read from the
+   database on every request, so a disabled or locked account is refused even with a token that has not expired.
 3. **Refresh** - `POST /api/auth/refresh` with `{"refreshToken"}` returns a new pair. Each refresh token works once,
    and presenting one that was already used ends the whole session. A session ends `JWT_REFRESH_TOKEN_VALIDITY` after
    login, however often it is refreshed.
 4. **Log out** - `POST /api/auth/logout` with `{"refreshToken"}` ends the session. It answers 204 whether the token is
    valid, invalid, unknown or already revoked; malformed input - a missing, blank or over-length `refreshToken` - fails
-   validation with 400. The access token already issued stays valid until it expires, at most an hour later, so
-   discard it.
+   validation with 400. The access token already issued stays valid until it expires - at most
+   `JWT_ACCESS_TOKEN_VALIDITY` after it was issued, an hour by default - so discard it.
 5. **Change password** - `POST /api/auth/password`, signed in, with `{"currentPassword", "newPassword"}` answers 204
    and ends every refresh session of the account.
 
@@ -295,7 +297,8 @@ on GitHub.
 
 - **Single instance.** Login rate limiting is kept in memory, per instance and per username; several instances
   multiply the limit.
-- **Access tokens** last a fixed hour and are not revoked before they expire, even by logout or a password change.
+- **Access tokens** last one hour by default, configurable through `JWT_ACCESS_TOKEN_VALIDITY`, and are not
+  revoked before they expire, even by logout or a password change.
 - **Refresh-token records** are kept after they expire or are revoked; nothing purges them.
 - **Fine payments** are recorded by staff; there is no payment gateway.
 - **Libraries** can be registered by any administrator.

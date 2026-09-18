@@ -34,14 +34,19 @@ import io.jsonwebtoken.security.Keys;
 public class JwtService {
 
     /**
-     * How long an issued token stays valid.
+     * The property naming how long an issued access token stays valid.
      *
      * <p>Short on purpose. A token cannot be withdrawn once handed out - there
      * is no list of revoked tokens to consult - so the only real limit on a
-     * stolen one is how quickly it expires. An hour is a temporary figure for
-     * development, not a considered policy.</p>
+     * stolen one is how quickly it expires. Logging out ends the refresh
+     * session at once, but an access token already issued keeps working until
+     * this long after it was minted, which is why a deployment that wants a
+     * narrower window can shorten it here rather than rebuild.</p>
+     *
+     * <p>Configured as an ISO-8601 duration, {@code PT1H} by default. Zero or
+     * negative stops the application at startup.</p>
      */
-    private static final Duration TOKEN_VALIDITY = Duration.ofHours(1);
+    static final String VALIDITY_PROPERTY = "security.access-token.validity";
 
     /** HS256 requires a key of at least 256 bits, which is 32 bytes. */
     private static final int MINIMUM_SECRET_LENGTH_BYTES = 32;
@@ -75,6 +80,9 @@ public class JwtService {
     /** Stamped as {@code aud} on every token issued, and required on every token accepted. */
     private final String audience;
 
+    /** How long an issued access token stays valid, from {@link #VALIDITY_PROPERTY}. */
+    private final Duration accessTokenValidity;
+
     /**
      * Builds the signing key once, at startup.
      *
@@ -107,19 +115,24 @@ public class JwtService {
      * variable is absent, but an empty variable resolves to an empty string,
      * which is not a name anything should be issued under.</p>
      *
-     * @param secret   the configured signing secret, from {@code jwt.secret}
-     * @param issuer   the name stamped as {@code iss} and required on every
-     *                 token, from {@code jwt.issuer}
-     * @param audience the name stamped as {@code aud} and required on every
-     *                 token, from {@code jwt.audience}
+     * @param secret              the configured signing secret, from
+     *                            {@code jwt.secret}
+     * @param issuer              the name stamped as {@code iss} and required
+     *                            on every token, from {@code jwt.issuer}
+     * @param audience            the name stamped as {@code aud} and required
+     *                            on every token, from {@code jwt.audience}
+     * @param accessTokenValidity how long an issued token lasts, from
+     *                            {@link #VALIDITY_PROPERTY}
      * @throws IllegalStateException if the secret is blank, is the retired
      *                               development placeholder, or is too short
-     *                               to sign safely, or if the issuer or the
-     *                               audience is blank
+     *                               to sign safely, if the issuer or the
+     *                               audience is blank, or if the validity is
+     *                               missing, zero or negative
      */
     public JwtService(@Value("${jwt.secret}") String secret,
             @Value("${jwt.issuer}") String issuer,
-            @Value("${jwt.audience}") String audience) {
+            @Value("${jwt.audience}") String audience,
+            @Value("${" + VALIDITY_PROPERTY + "}") Duration accessTokenValidity) {
         if (secret == null || secret.isBlank()) {
             throw new IllegalStateException(
                     "jwt.secret resolved to a blank value. Set the JWT_SECRET environment"
@@ -156,9 +169,17 @@ public class JwtService {
                             + " variable to the name of the API these tokens are for.");
         }
 
+        if (accessTokenValidity == null || accessTokenValidity.isZero() || accessTokenValidity.isNegative()) {
+            throw new IllegalStateException(
+                    VALIDITY_PROPERTY + " must be a positive duration, such as PT1H. Set the"
+                            + " JWT_ACCESS_TOKEN_VALIDITY environment variable, or leave it unset"
+                            + " for the default.");
+        }
+
         this.signingKey = Keys.hmacShaKeyFor(keyBytes);
         this.issuer = issuer;
         this.audience = audience;
+        this.accessTokenValidity = accessTokenValidity;
     }
 
     /**
@@ -203,7 +224,7 @@ public class JwtService {
      *       is for, both from configuration. {@link #extractUsername} refuses
      *       any token that does not carry exactly these two values.</li>
      *   <li><b>issued at</b> and <b>expiration</b> - when it was minted and
-     *       when it stops counting.</li>
+     *       when it stops counting, the configured validity later.</li>
      * </ul>
      *
      * <p>No role is included. Authorization never reads one: the JWT filter
@@ -218,7 +239,7 @@ public class JwtService {
      */
     public String generateToken(UserDetails userDetails) {
         Instant issuedAt = Instant.now();
-        Instant expiresAt = issuedAt.plus(TOKEN_VALIDITY);
+        Instant expiresAt = issuedAt.plus(accessTokenValidity);
 
         return Jwts.builder()
                 .subject(userDetails.getUsername())
