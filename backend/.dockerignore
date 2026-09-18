@@ -1,0 +1,13 @@
+# Build output and local files never belong in the image's build context.
+target/
+*.log
+
+# Environment files hold credentials; they are supplied at run time instead.
+.env
+.env.*
+
+# Editor and OS files.
+.idea/
+.vscode/
+*.iml
+.DS_Store

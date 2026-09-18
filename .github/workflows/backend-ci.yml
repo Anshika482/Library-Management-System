@@ -1,0 +1,135 @@
+name: backend-ci
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-ci.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test suite on MySQL 8
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # A throwaway database server. The password is a test-only value for this
+    # container and is not a repository secret.
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci-only-root-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci-only-root-password"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      # The JWT test settings and the test JVM's time zone come from pom.xml.
+      - name: Run tests
+        env:
+          DB_USERNAME: root
+          DB_PASSWORD: ci-only-root-password
+        run: ./mvnw -B -ntp test
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: backend/target/surefire-reports
+
+  docker-smoke:
+    name: Docker image smoke test
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # A fresh, empty database and a dedicated account, as production expects.
+    # MySQL generates its own TLS certificate, which sslMode=REQUIRED accepts.
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci-only-root-password
+          MYSQL_DATABASE: library_db
+          MYSQL_USER: library_app
+          MYSQL_PASSWORD: ci-only-app-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci-only-root-password"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t library-management-backend:ci backend
+
+      - name: Start the container with the production profile
+        run: |
+          docker run -d --name lms --network host \
+            -e DB_URL='jdbc:mysql://127.0.0.1:3306/library_db?sslMode=REQUIRED' \
+            -e DB_USERNAME=library_app \
+            -e DB_PASSWORD=ci-only-app-password \
+            -e JWT_SECRET=ci-only-jwt-signing-secret-for-the-smoke-test \
+            -e JWT_ISSUER=ci-only-issuer \
+            -e JWT_AUDIENCE=ci-only-audience \
+            library-management-backend:ci
+
+      - name: Wait for readiness
+        run: |
+          for attempt in $(seq 1 60); do
+            if [ "$(docker inspect -f '{{.State.Running}}' lms)" != "true" ]; then
+              echo "The container stopped before becoming ready."
+              exit 1
+            fi
+            if curl -fsS http://127.0.0.1:8080/actuator/health/readiness; then
+              echo
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "The application did not become ready."
+          exit 1
+
+      - name: Check liveness and that the API requires a token
+        run: |
+          liveness=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/actuator/health/liveness)
+          echo "GET /actuator/health/liveness -> $liveness"
+          [ "$liveness" = "200" ]
+
+          books=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/books)
+          echo "GET /api/books without a token -> $books"
+          [ "$books" = "401" ]
+
+      - name: Container logs
+        if: always()
+        run: docker logs lms || true
