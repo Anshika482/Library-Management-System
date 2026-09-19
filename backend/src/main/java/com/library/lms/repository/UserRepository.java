@@ -60,4 +60,17 @@ public interface UserRepository extends JpaRepository<User, Long>, JpaSpecificat
 
     /** Whether any account already uses this email. Unscoped for the same reason. */
     boolean existsByEmail(String email);
+
+    /**
+     * The account with this email, in whichever library it is.
+     *
+     * <p>Unscoped because an email is unique across the whole table, and a
+     * self-service reset is asked for before anyone is signed in - there is no
+     * library to scope by. The column's collation compares case-insensitively,
+     * as the uniqueness check does.</p>
+     *
+     * @param email the address
+     * @return the matching account, or empty if there is none
+     */
+    Optional<User> findByEmail(String email);
 }

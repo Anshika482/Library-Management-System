@@ -60,7 +60,10 @@ class DeploymentArtifactsTest {
         Map<String, String> template = envTemplate();
 
         template.forEach((key, value) -> {
-            if (key.contains("SECRET") || key.contains("PASSWORD") || key.equals("DB_USERNAME")) {
+            // Credentials: DB_PASSWORD, BOOTSTRAP_ADMIN_PASSWORD, JWT_SECRET. "Ends in
+            // PASSWORD" rather than "contains" it, so a setting that is merely about
+            // passwords - PASSWORD_RESET_TOKEN_VALIDITY, a lifetime - may show its default.
+            if (key.contains("SECRET") || key.endsWith("PASSWORD") || key.equals("DB_USERNAME")) {
                 assertThat(value).as("%s must be left blank", key).isEmpty();
             }
             assertThat(value.toLowerCase()).as(key).doesNotContain("password=").doesNotContain("user=");

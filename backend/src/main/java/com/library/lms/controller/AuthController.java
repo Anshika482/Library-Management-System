@@ -15,12 +15,15 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.library.lms.dto.ChangePasswordRequest;
+import com.library.lms.dto.ForgotPasswordRequest;
 import com.library.lms.dto.LoginRequest;
 import com.library.lms.dto.RefreshTokenRequest;
+import com.library.lms.dto.ResetPasswordRequest;
 import com.library.lms.exception.TooManyLoginAttemptsException;
 import com.library.lms.service.JwtService;
 import com.library.lms.service.LoginAttemptService;
 import com.library.lms.service.RefreshTokenService;
+import com.library.lms.service.SelfServicePasswordResetService;
 import com.library.lms.service.UserService;
 
 import jakarta.validation.Valid;
@@ -57,15 +60,19 @@ public class AuthController {
 
     private final UserDetailsService userDetailsService;
 
+    private final SelfServicePasswordResetService passwordResetService;
+
     public AuthController(AuthenticationManager authenticationManager, JwtService jwtService,
             LoginAttemptService loginAttemptService, UserService userService,
-            RefreshTokenService refreshTokenService, UserDetailsService userDetailsService) {
+            RefreshTokenService refreshTokenService, UserDetailsService userDetailsService,
+            SelfServicePasswordResetService passwordResetService) {
         this.authenticationManager = authenticationManager;
         this.jwtService = jwtService;
         this.loginAttemptService = loginAttemptService;
         this.userService = userService;
         this.refreshTokenService = refreshTokenService;
         this.userDetailsService = userDetailsService;
+        this.passwordResetService = passwordResetService;
     }
 
     /**
@@ -250,6 +257,62 @@ public class AuthController {
     @PostMapping("/logout")
     public ResponseEntity<Void> logout(@Valid @RequestBody RefreshTokenRequest request) {
         refreshTokenService.revoke(request.getRefreshToken());
+
+        return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * What {@code POST /api/auth/forgot-password} always answers.
+     *
+     * <p>One message for every outcome, so the answer cannot tell anyone whether
+     * the address has an account.</p>
+     */
+    public record ForgotPasswordResponse(String message) {
+    }
+
+    /** The one response a reset request ever gets. */
+    private static final ForgotPasswordResponse FORGOT_PASSWORD_ACCEPTED = new ForgotPasswordResponse(
+            "If an account with that email exists, password reset instructions will be sent.");
+
+    /**
+     * Asks for a password reset link for an email address.
+     *
+     * <p>Open to anonymous callers: whoever needs this cannot sign in. The answer
+     * is 202 with the same body whether the address has an account, a disabled
+     * one, none at all, or has asked too often - so it cannot be used to find
+     * out which addresses are registered. Only the shape of the address is
+     * checked in the open, with a 400 that says nothing about accounts.</p>
+     *
+     * <p>No email is sent yet. A token issued here is handed to the delivery
+     * boundary; see {@link SelfServicePasswordResetService}.</p>
+     *
+     * @param request the address
+     * @return 202 with the one fixed message
+     */
+    @PostMapping("/forgot-password")
+    public ResponseEntity<ForgotPasswordResponse> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
+        passwordResetService.requestReset(request.getEmail());
+
+        return ResponseEntity.accepted().body(FORGOT_PASSWORD_ACCEPTED);
+    }
+
+    /**
+     * Sets a new password with a reset token.
+     *
+     * <p>Open to anonymous callers, for the same reason: the token is the
+     * credential. It works once and for minutes only. Every refusal - unknown,
+     * used, superseded, expired, or for an account since disabled - is the same
+     * 400 with the same sentence.</p>
+     *
+     * <p>A new password that breaks the 8-to-72 rule is refused before the token
+     * is looked at, so the token is not used up by a typo.</p>
+     *
+     * @param request the token and the new password
+     * @return 204 once the password is changed
+     */
+    @PostMapping("/reset-password")
+    public ResponseEntity<Void> resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
+        passwordResetService.resetPassword(request.getToken(), request.getNewPassword());
 
         return ResponseEntity.noContent().build();
     }

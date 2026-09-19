@@ -184,6 +184,13 @@ public class SecurityConfig {
                         // RefreshTokenService checks it. POST and these exact paths only.
                         .requestMatchers(HttpMethod.POST, "/api/auth/refresh", "/api/auth/logout").permitAll()
 
+                        // Self-service password reset: asked for and redeemed by
+                        // someone who, by definition, cannot sign in. The address
+                        // and the token are the only inputs, and neither answer
+                        // says whether an account exists.
+                        .requestMatchers(HttpMethod.POST, "/api/auth/forgot-password", "/api/auth/reset-password")
+                                .permitAll()
+
                         // Health probes, for callers that have no token: a load
                         // balancer, an orchestrator, a monitor. GET only, and these
                         // exact paths only - a health component path such as

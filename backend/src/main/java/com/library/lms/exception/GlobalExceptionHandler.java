@@ -870,6 +870,21 @@ public class GlobalExceptionHandler {
      * belonging to an account that is disabled or locked - so the answer cannot
      * be used to find out which.</p>
      */
+    /**
+     * Handles a password reset token that cannot be redeemed. One fixed 400 for
+     * every reason, so the answer does not say whether a token ever existed.
+     */
+    @ExceptionHandler(InvalidPasswordResetTokenException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidPasswordResetToken(
+            InvalidPasswordResetTokenException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.BAD_REQUEST.value(),
+                exception.getMessage(),
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorResponse);
+    }
+
     @ExceptionHandler(InvalidRefreshTokenException.class)
     public ResponseEntity<ErrorResponse> handleInvalidRefreshToken(InvalidRefreshTokenException exception) {
         ErrorResponse errorResponse = new ErrorResponse(

@@ -104,7 +104,8 @@ export DB_PASSWORD='<your local MySQL password>'
 | SQL logging | on | off |
 
 In every profile startup fails if `DB_PASSWORD` or a JWT setting is missing or unusable, or if the CORS origins, fine
-rate or refresh-token lifetime are invalid. The production profile also refuses to start when:
+rate, refresh-token lifetime or password-reset token lifetime are invalid. The production profile also refuses to
+start when:
 
 - `DB_URL` is missing, turns TLS off (`useSSL=false`), does not require TLS (`sslMode=REQUIRED`, `VERIFY_CA` or
   `VERIFY_IDENTITY`), allows public key retrieval, creates the database on demand, or carries a password;
@@ -130,6 +131,9 @@ rate or refresh-token lifetime are invalid. The production profile also refuses 
 | `JWT_REFRESH_TOKEN_VALIDITY` | no | `P7D` | Login session lifetime, as an ISO-8601 duration |
 | `JWT_REFRESH_TOKEN_RETENTION` | no | `P30D` | How long ended sessions are kept; at least the session lifetime |
 | `JWT_REFRESH_TOKEN_CLEANUP_INTERVAL` | no | `PT1H` | How often ended sessions are swept away |
+| `PASSWORD_RESET_TOKEN_VALIDITY` | no | `PT30M` | How long a self-service reset token works; at most `PT24H` |
+| `PASSWORD_RESET_TOKEN_RETENTION` | no | `P1D` | How long spent reset tokens are kept before they are swept |
+| `PASSWORD_RESET_TOKEN_CLEANUP_INTERVAL` | no | `PT1H` | How often spent reset tokens are swept away |
 | `BOOTSTRAP_ADMIN_LIBRARY` | first start | - | Name of the first library, created when there are no accounts |
 | `BOOTSTRAP_ADMIN_USERNAME` | first start | - | Username of its first administrator |
 | `BOOTSTRAP_ADMIN_EMAIL` | first start | - | Email of its first administrator |
@@ -153,6 +157,7 @@ starts; Hibernate then only validates the schema.
 | `V1__initial_schema.sql` | `libraries`, `users`, `categories`, `books`, `transactions` |
 | `V2__fine_payment_tracking.sql` | fine payment status, time and recording staff member on `transactions` |
 | `V3__refresh_tokens.sql` | `refresh_tokens`, which holds token hashes, never tokens |
+| `V4__password_reset_tokens.sql` | `password_reset_tokens`, which holds reset-token hashes, never tokens |
 
 - The database must already exist, and the account needs rights to create and alter tables in it.
 - An applied migration is never edited: Flyway checksums it and refuses to start if it changed. A schema change is a new
@@ -162,9 +167,9 @@ starts; Hibernate then only validates the schema.
 
 **Existing databases.** A database whose schema Hibernate built with `ddl-auto=update` - such as a local development
 `library_db` - has tables but no Flyway history, so the production profile refuses to start against it. Its schema can
-also differ from V1-V3: Hibernate lists ENUM values in a different order from V1, and tables that existed before the
+also differ from V1-V4: Hibernate lists ENUM values in a different order from V1, and tables that existed before the
 entities may carry other constraint names. Deploy to a fresh, empty database. This project provides no procedure for
-baselining an existing one; do not baseline one without first verifying that its schema matches V1-V3 exactly.
+baselining an existing one; do not baseline one without first verifying that its schema matches V1-V4 exactly.
 
 ## Time zone and date storage
 
@@ -224,6 +229,16 @@ components or details. No other Actuator endpoint is exposed.
    `JWT_ACCESS_TOKEN_VALIDITY` after it was issued, an hour by default - so discard it.
 5. **Change password** - `POST /api/auth/password`, signed in, with `{"currentPassword", "newPassword"}` answers 204
    and ends every refresh session of the account.
+6. **Forgot password** - `POST /api/auth/forgot-password` with `{"email"}` always answers 202 with the same message,
+   whether or not an account has that address. For an enabled, unlocked account it issues a reset token: 256 random
+   bits, stored only as a SHA-256, valid for `PASSWORD_RESET_TOKEN_VALIDITY`, and spending any earlier one. Each address
+   may ask three times in fifteen minutes; further requests are dropped, with the same 202. The account is looked up
+   and the token issued after the answer has been sent, on a small background queue, so the answer takes the same
+   time whether or not the address has an account. No email is sent yet.
+7. **Reset password** - `POST /api/auth/reset-password` with `{"token", "newPassword"}` answers 204 and works once:
+   the token is spent, the password is set, every refresh session ends and the login block is cleared. Any token that
+   cannot be used - unknown, used, superseded, expired, or of an account since disabled - gets the same 400. A new
+   password outside 8 to 72 characters is refused without using the token up.
 
 - A failed login answers 401 `Invalid username or password` whatever the reason; five consecutive failures block the
   username for fifteen minutes.
@@ -232,7 +247,8 @@ components or details. No other Actuator endpoint is exposed.
   `JWT_REFRESH_TOKEN_RETENTION` after it ends - that is what keeps reuse of an old token recognisable -
   and a sweep every `JWT_REFRESH_TOKEN_CLEANUP_INTERVAL` removes the ones past it. A session that is
   still running is never touched.
-- Login, refresh, logout and the health probes are the only endpoints open without a token.
+- Login, refresh, logout, forgot-password, reset-password and the health probes are the only endpoints open without
+  a token.
 
 ## Endpoints
 
@@ -242,6 +258,7 @@ and `direction`.
 | Method and path | Access |
 |---|---|
 | `POST /api/auth/login`, `/api/auth/refresh`, `/api/auth/logout` | public |
+| `POST /api/auth/forgot-password`, `/api/auth/reset-password` | public |
 | `POST /api/auth/password` | any account |
 | `GET /api/books`, `/api/books/{id}`, `/api/books/search`, `/api/books/category/{category}` | any account |
 | `POST /api/books`; `PUT` and `DELETE /api/books/{id}` | admin, librarian |
@@ -327,13 +344,18 @@ on GitHub.
 
 ## Known limitations
 
-- **Single instance.** Login rate limiting is kept in memory, per instance and per username; several instances
-  multiply the limit.
+- **Single instance.** Login and password-reset rate limiting are kept in memory, per instance and per username or
+  address; several instances multiply the limits. The reset limit sits behind the `PasswordResetRequestLimiter`
+  interface, so a shared implementation can replace the in-memory one later.
 - **Access tokens** last one hour by default, configurable through `JWT_ACCESS_TOKEN_VALIDITY`, and are not
   revoked before they expire, even by logout or a password change.
 - **Refresh-token records** outlive their session by `JWT_REFRESH_TOKEN_RETENTION`, so that reuse of an old
   token is still recognised, and are then swept away. Every instance runs the sweep.
-- **Password recovery** is staff-assisted; there is no self-service reset by email.
+- **Reset links are not delivered yet.** Forgot-password issues tokens, but no email is sent, so until a sender is
+  added a forgotten password is reset by staff with `POST /api/users/{userId}/password-reset`.
+- **Forgot-password queue.** Issuing runs on one background thread with room for 500 waiting requests; beyond
+  that, requests are dropped and answered with the same 202. Requests still queued at shutdown get ten seconds to
+  finish. Spent reset tokens are kept for `PASSWORD_RESET_TOKEN_RETENTION` and then swept away.
 - **Fine payments** are recorded by staff; there is no payment gateway.
 - **Libraries** can be registered by any administrator.
 - **Dates and times** in API responses carry no offset, and one business time zone applies to every library.
