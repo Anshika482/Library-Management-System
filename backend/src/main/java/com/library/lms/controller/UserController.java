@@ -3,17 +3,21 @@ package com.library.lms.controller;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.library.lms.dto.CreateUserRequest;
+import com.library.lms.dto.PagedResponse;
 import com.library.lms.dto.UserResponse;
 import com.library.lms.dto.UserStatusRequest;
 import com.library.lms.dto.UserStatusResponse;
+import com.library.lms.entity.Role;
 import com.library.lms.service.UserService;
 
 import jakarta.validation.Valid;
@@ -84,6 +88,49 @@ public class UserController {
         UserResponse created = userService.createUser(request, authentication.getName());
 
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
+    }
+
+    /**
+     * GET /api/users - one page of the caller's library's accounts.
+     *
+     * <p>Administrators see every account; librarians see members only, and
+     * asking for another role is refused with 403. Members never reach this -
+     * the filter chain stops them first.</p>
+     *
+     * <p>{@code keyword} matches username or email, case-insensitively.
+     * {@code role}, {@code enabled} and {@code accountNonLocked} narrow the
+     * result further; every filter given must match. Pages follow the rest of
+     * the API: {@code page} from 0, {@code size} 1 to 50, and {@code sortBy} one
+     * of id, username, email or role.</p>
+     */
+    @GetMapping
+    public ResponseEntity<PagedResponse<UserResponse>> listUsers(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(defaultValue = "id") String sortBy,
+            @RequestParam(defaultValue = "asc") String direction,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) Role role,
+            @RequestParam(required = false) Boolean enabled,
+            @RequestParam(required = false) Boolean accountNonLocked,
+            Authentication authentication) {
+        return ResponseEntity.ok(userService.listUsers(page, size, sortBy, direction, keyword, role, enabled,
+                accountNonLocked, authentication.getName()));
+    }
+
+    /**
+     * GET /api/users/{userId} - one account of the caller's library.
+     *
+     * <p>404 for an account that is not there to be seen: in another library,
+     * or - for a librarian - one that is not a member. The two answers are the
+     * same, so the endpoint cannot be used to learn which ids belong to staff or
+     * to other libraries.</p>
+     */
+    @GetMapping("/{userId}")
+    public ResponseEntity<UserResponse> getUser(
+            @PathVariable @Positive(message = "User id must be a positive number") Long userId,
+            Authentication authentication) {
+        return ResponseEntity.ok(userService.getUser(userId, authentication.getName()));
     }
 
     @PatchMapping("/{userId}/status")

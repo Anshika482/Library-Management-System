@@ -220,10 +220,23 @@ public class SecurityConfig {
                         .requestMatchers("/api/transactions/status/**").hasAnyAuthority(ADMIN, LIBRARIAN)
                         .requestMatchers(HttpMethod.GET, "/api/transactions/**").authenticated()
 
-                        // Administrators only, and no HTTP method named: these
-                        // endpoints change who may use the system, so every
-                        // verb on the path is covered rather than the ones
-                        // thought of today.
+                        // The user directory: reading accounts is open to both
+                        // kinds of staff. Librarians need it to find the member
+                        // they are issuing a book to; UserService then limits
+                        // them to members. HEAD is named as well as GET because
+                        // Spring MVC serves HEAD from the GET handler - the same
+                        // gap the transaction rules above close. "/api/users/*"
+                        // is one segment only, so the status endpoint below it is
+                        // not covered here.
+                        .requestMatchers(HttpMethod.GET, "/api/users", "/api/users/*")
+                                .hasAnyAuthority(ADMIN, LIBRARIAN)
+                        .requestMatchers(HttpMethod.HEAD, "/api/users", "/api/users/*")
+                                .hasAnyAuthority(ADMIN, LIBRARIAN)
+
+                        // Everything else on the path is administrators only, and
+                        // no HTTP method is named: these endpoints change who may
+                        // use the system, so every other verb is covered rather
+                        // than the ones thought of today.
                         .requestMatchers("/api/users/**").hasAuthority(ADMIN)
 
                         // Registering a library, together with its first

@@ -252,11 +252,18 @@ and `direction`.
 | `POST /api/transactions/{id}/fine-payment` - records a payment taken by staff | admin, librarian |
 | `GET /api/transactions/{id}`, `/api/transactions/user/{userId}` | staff; members see only their own |
 | `GET /api/transactions/book/{bookId}`, `/api/transactions/status/{status}` | admin, librarian |
+| `GET /api/users` - lists accounts | admin: every account; librarian: members only |
+| `GET /api/users/{userId}` - one account | admin: any account; librarian: members only |
 | `POST /api/users` - creates a member or a librarian | admin |
 | `PATCH /api/users/{userId}/status` - enables, disables, locks or unlocks an account | admin |
 | `POST /api/libraries` with `{"name", "admin": {"username", "email", "password"}}` | admin |
 
 An administrator cannot disable or lock their own account.
+
+`GET /api/users` filters by `keyword` (username or email, case-insensitive), `role`, `enabled` and
+`accountNonLocked`, and sorts by `id`, `username`, `email` or `role`. The user directory never returns a password or
+its hash. A librarian who filters for administrators or librarians gets 403, and a staff account or another library's
+account is answered with 404, exactly like an id that does not exist. Members have no directory access.
 
 ## Provisioning the first library and administrator
 

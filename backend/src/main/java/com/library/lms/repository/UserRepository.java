@@ -3,6 +3,7 @@ package com.library.lms.repository;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.stereotype.Repository;
 
 import com.library.lms.entity.User;
@@ -16,7 +17,7 @@ import com.library.lms.entity.User;
  * from an id in a request body.</p>
  */
 @Repository
-public interface UserRepository extends JpaRepository<User, Long> {
+public interface UserRepository extends JpaRepository<User, Long>, JpaSpecificationExecutor<User> {
 
     /**
      * Finds the account with this login name.

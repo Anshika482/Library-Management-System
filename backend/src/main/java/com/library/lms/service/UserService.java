@@ -1,17 +1,25 @@
 package com.library.lms.service;
 
 import java.util.EnumSet;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeSet;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.library.lms.dto.ChangePasswordRequest;
 import com.library.lms.dto.CreateUserRequest;
+import com.library.lms.dto.PagedResponse;
 import com.library.lms.dto.UserResponse;
 import com.library.lms.dto.UserStatusRequest;
 import com.library.lms.dto.UserStatusResponse;
@@ -20,10 +28,14 @@ import com.library.lms.entity.Role;
 import com.library.lms.entity.User;
 import com.library.lms.exception.DuplicateAccountException;
 import com.library.lms.exception.InvalidCurrentPasswordException;
+import com.library.lms.exception.InvalidPaginationException;
+import com.library.lms.exception.InvalidSortException;
 import com.library.lms.exception.RoleNotAssignableException;
 import com.library.lms.exception.SelfLockoutException;
+import com.library.lms.exception.UserDirectoryAccessDeniedException;
 import com.library.lms.exception.UserNotFoundException;
 import com.library.lms.repository.UserRepository;
+import com.library.lms.repository.UserSpecifications;
 
 /**
  * Turns an administrator's request to enable, disable, lock or unlock an
@@ -174,6 +186,174 @@ public class UserService {
 
         log.info("Password changed for username='{}': {} live refresh token(s) revoked",
                 user.getUsername(), revoked);
+    }
+
+    // ---------- the user directory ----------
+
+    /** The most accounts one page may hold - the same ceiling as every other list in the API. */
+    private static final int MAX_PAGE_SIZE = 50;
+
+    /**
+     * The sort names the directory accepts, each mapped to the entity property
+     * it sorts by. The value handed to {@code Sort.by} is always the right-hand
+     * side, so a caller can never name a property this map does not list.
+     */
+    private static final Map<String, String> SORTABLE_FIELDS = Map.of(
+            "id", "id",
+            "username", "username",
+            "email", "email",
+            "role", "role");
+
+    /**
+     * One page of the caller's library's accounts.
+     *
+     * <p><b>Scoped to the caller's library, always.</b> The library comes from
+     * the caller's own account, never from the request, and it is the first
+     * predicate of every query - search and filters narrow within it and
+     * cannot reach past it.</p>
+     *
+     * <p><b>What each role sees.</b> An administrator sees every account and
+     * may filter by any role. A librarian sees members only: the role filter is
+     * forced to members, and asking for administrators or librarians is refused
+     * with {@link UserDirectoryAccessDeniedException} rather than quietly
+     * answered with members. A member is refused outright; the filter chain
+     * already stops them, and this is the second lock.</p>
+     *
+     * <p>Every filter given must match. The response carries the same fields as
+     * every other account response - never the password hash.</p>
+     *
+     * @throws UserDirectoryAccessDeniedException if the caller may not see the
+     *                                            requested role, or is a member
+     * @throws InvalidPaginationException         if page or size is out of range
+     * @throws InvalidSortException               if the field or direction is
+     *                                            unsupported
+     */
+    @Transactional(readOnly = true)
+    public PagedResponse<UserResponse> listUsers(int page, int size, String sortBy, String direction, String keyword,
+            Role role, Boolean enabled, Boolean accountNonLocked, String authenticatedUsername) {
+        User caller = authenticatedUser(authenticatedUsername);
+        Role visibleRole = visibleRole(caller, role);
+
+        validatePagination(page, size);
+        Pageable pageable = PageRequest.of(page, size, resolveSort(sortBy, direction));
+
+        Specification<User> filter = UserSpecifications.belongsToLibrary(caller.getLibrary().getId());
+
+        if (visibleRole != null) {
+            filter = filter.and(UserSpecifications.hasRole(visibleRole));
+        }
+        if (enabled != null) {
+            filter = filter.and(UserSpecifications.isEnabled(enabled));
+        }
+        if (accountNonLocked != null) {
+            filter = filter.and(UserSpecifications.isAccountNonLocked(accountNonLocked));
+        }
+        if (keyword != null && !keyword.isBlank()) {
+            filter = filter.and(UserSpecifications.matchesKeyword(keyword.trim()));
+        }
+
+        Page<User> users = userRepository.findAll(filter, pageable);
+
+        return new PagedResponse<>(
+                users.getContent().stream().map(UserService::toResponse).toList(),
+                users.getNumber(),
+                users.getSize(),
+                users.getTotalElements(),
+                users.getTotalPages());
+    }
+
+    /**
+     * One account of the caller's library.
+     *
+     * <p><b>404 for anything the caller may not see</b> - an account in another
+     * library, or, for a librarian, one that is not a member. Both are answered
+     * exactly as an id that does not exist, so the endpoint cannot be used to
+     * learn which ids belong to staff or to other libraries.</p>
+     *
+     * @throws UserDirectoryAccessDeniedException if the caller is a member
+     * @throws UserNotFoundException              if the account is not there to
+     *                                            be seen
+     */
+    @Transactional(readOnly = true)
+    public UserResponse getUser(Long userId, String authenticatedUsername) {
+        User caller = authenticatedUser(authenticatedUsername);
+        requireStaff(caller);
+
+        User target = userRepository.findByIdAndLibraryId(userId, caller.getLibrary().getId())
+                .orElseThrow(() -> new UserNotFoundException(userId));
+
+        if (caller.getRole() == Role.ROLE_LIBRARIAN && target.getRole() != Role.ROLE_MEMBER) {
+            throw new UserNotFoundException(userId);
+        }
+
+        return toResponse(target);
+    }
+
+    /**
+     * The role the caller's listing is limited to, or null for no limit.
+     *
+     * @throws UserDirectoryAccessDeniedException if the caller may not see the
+     *                                            requested role, or is a member
+     */
+    private static Role visibleRole(User caller, Role requested) {
+        requireStaff(caller);
+
+        if (caller.getRole() == Role.ROLE_ADMIN) {
+            return requested;
+        }
+
+        if (requested != null && requested != Role.ROLE_MEMBER) {
+            throw new UserDirectoryAccessDeniedException();
+        }
+
+        return Role.ROLE_MEMBER;
+    }
+
+    /** Members have no directory access; the filter chain refuses them first, and this refuses them again. */
+    private static void requireStaff(User caller) {
+        if (caller.getRole() != Role.ROLE_ADMIN && caller.getRole() != Role.ROLE_LIBRARIAN) {
+            throw new UserDirectoryAccessDeniedException();
+        }
+    }
+
+    /** The same rules, and the same messages, as every other paged list in the API. */
+    private static void validatePagination(int page, int size) {
+        if (page < 0) {
+            throw new InvalidPaginationException("Page must be 0 or greater, but was " + page);
+        }
+        if (size < 1) {
+            throw new InvalidPaginationException("Size must be at least 1, but was " + size);
+        }
+        if (size > MAX_PAGE_SIZE) {
+            throw new InvalidPaginationException(
+                    "Size must not exceed " + MAX_PAGE_SIZE + ", but was " + size);
+        }
+    }
+
+    /**
+     * Turns the requested field and direction into a safe {@link Sort}, with id
+     * as the tie-breaker so page boundaries are deterministic - the same rules
+     * as the book list.
+     */
+    private static Sort resolveSort(String sortBy, String direction) {
+        String property = SORTABLE_FIELDS.get(sortBy);
+        if (property == null) {
+            throw new InvalidSortException("Unsupported sort field. Allowed fields are: "
+                    + String.join(", ", new TreeSet<>(SORTABLE_FIELDS.keySet())));
+        }
+
+        Sort.Direction sortDirection;
+        if ("asc".equalsIgnoreCase(direction)) {
+            sortDirection = Sort.Direction.ASC;
+        } else if ("desc".equalsIgnoreCase(direction)) {
+            sortDirection = Sort.Direction.DESC;
+        } else {
+            throw new InvalidSortException("Unsupported sort direction. Allowed directions are: asc, desc");
+        }
+
+        Sort sort = Sort.by(sortDirection, property);
+
+        return "id".equals(property) ? sort : sort.and(Sort.by(Sort.Direction.ASC, "id"));
     }
 
     private static UserResponse toResponse(User user) {

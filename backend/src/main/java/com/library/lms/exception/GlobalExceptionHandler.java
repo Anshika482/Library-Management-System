@@ -900,6 +900,27 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(errorResponse);
     }
 
+    /**
+     * Handles a librarian asking the user directory for staff accounts.
+     *
+     * <p>Librarians may see members and nothing else. The same fixed literal as
+     * the transaction refusal, for the same reason: the response names nothing
+     * about the accounts that were asked for.</p>
+     *
+     * @param exception the refusal, deliberately never read
+     * @return 403 with a message that describes nothing about the target
+     */
+    @ExceptionHandler(UserDirectoryAccessDeniedException.class)
+    public ResponseEntity<ErrorResponse> handleUserDirectoryAccessDenied(
+            UserDirectoryAccessDeniedException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.FORBIDDEN.value(),
+                "Access denied",
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(errorResponse);
+    }
+
     @ExceptionHandler(AuthenticationException.class)
     public ResponseEntity<ErrorResponse> handleAuthenticationFailure(AuthenticationException exception) {
         ErrorResponse errorResponse = new ErrorResponse(
