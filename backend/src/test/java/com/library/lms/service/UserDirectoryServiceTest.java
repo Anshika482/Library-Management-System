@@ -36,7 +36,7 @@ class UserDirectoryServiceTest {
     private final UserRepository users = mock(UserRepository.class);
 
     private final UserService service = new UserService(users, mock(PasswordEncoder.class),
-            mock(RefreshTokenService.class));
+            mock(RefreshTokenService.class), mock(LoginAttemptService.class));
 
     private void givenCaller(Role role) {
         Library library = new Library();

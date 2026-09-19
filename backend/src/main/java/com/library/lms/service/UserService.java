@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.library.lms.dto.ChangePasswordRequest;
+import com.library.lms.dto.AdminPasswordResetRequest;
 import com.library.lms.dto.CreateUserRequest;
 import com.library.lms.dto.PagedResponse;
 import com.library.lms.dto.UserResponse;
@@ -30,8 +31,10 @@ import com.library.lms.exception.DuplicateAccountException;
 import com.library.lms.exception.InvalidCurrentPasswordException;
 import com.library.lms.exception.InvalidPaginationException;
 import com.library.lms.exception.InvalidSortException;
+import com.library.lms.exception.PasswordResetNotAllowedException;
 import com.library.lms.exception.RoleNotAssignableException;
 import com.library.lms.exception.SelfLockoutException;
+import com.library.lms.exception.SelfPasswordResetException;
 import com.library.lms.exception.UserDirectoryAccessDeniedException;
 import com.library.lms.exception.UserNotFoundException;
 import com.library.lms.repository.UserRepository;
@@ -71,11 +74,14 @@ public class UserService {
 
     private final RefreshTokenService refreshTokenService;
 
+    private final LoginAttemptService loginAttemptService;
+
     public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder,
-            RefreshTokenService refreshTokenService) {
+            RefreshTokenService refreshTokenService, LoginAttemptService loginAttemptService) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.refreshTokenService = refreshTokenService;
+        this.loginAttemptService = loginAttemptService;
     }
 
     /**
@@ -186,6 +192,76 @@ public class UserService {
 
         log.info("Password changed for username='{}': {} live refresh token(s) revoked",
                 user.getUsername(), revoked);
+    }
+
+    // ---------- staff password reset ----------
+
+    /**
+     * Sets a new password for someone who has forgotten theirs.
+     *
+     * <p><b>Who may reset whose.</b> An administrator may reset any account in
+     * their library except their own; a librarian may reset members only; a
+     * member may reset nobody's - the filter chain stops them first, and this
+     * refuses them again. The checks run in an order that gives nothing away
+     * across libraries: the account is looked up inside the caller's library
+     * before anything else is decided, so another library's account is the same
+     * 404 as an id that does not exist.</p>
+     *
+     * <p><b>Not for your own account.</b> This asks for no current password -
+     * the caller's authority stands in for it - so allowing it on the caller's
+     * own account would let a stolen administrator token set a password and keep
+     * the account. {@code POST /api/auth/password} is the way to change your
+     * own, and it is unchanged.</p>
+     *
+     * <p><b>What changes with it.</b> The password is stored through the same
+     * BCrypt encoder as every other. Every refresh session of the account is
+     * revoked in the same transaction, so whoever was using it - perhaps the
+     * reason for the reset - has to sign in again, with the new password. The
+     * account's failed-login counter is cleared, so an owner who was blocked for
+     * guessing can sign in at once. Access tokens already issued run out on
+     * their own, within {@code security.access-token.validity}.</p>
+     *
+     * <p>The log records who reset which account, by id. Never the password and
+     * never the hash.</p>
+     *
+     * @throws PasswordResetNotAllowedException if the caller is a member, or a
+     *                                          librarian naming a staff account
+     * @throws UserNotFoundException            if the account is not in the
+     *                                          caller's library
+     * @throws SelfPasswordResetException       if the account is the caller's own
+     */
+    @Transactional
+    public void resetPassword(Long userId, AdminPasswordResetRequest request, String authenticatedUsername) {
+        User caller = authenticatedUser(authenticatedUsername);
+
+        if (caller.getRole() != Role.ROLE_ADMIN && caller.getRole() != Role.ROLE_LIBRARIAN) {
+            throw new PasswordResetNotAllowedException();
+        }
+
+        User target = userRepository.findByIdAndLibraryId(userId, caller.getLibrary().getId())
+                .orElseThrow(() -> new UserNotFoundException(userId));
+
+        if (caller.getRole() == Role.ROLE_LIBRARIAN && target.getRole() != Role.ROLE_MEMBER) {
+            log.warn("Password reset refused for librarian='{}': user id={} is not a member",
+                    caller.getUsername(), target.getId());
+            throw new PasswordResetNotAllowedException();
+        }
+
+        if (Objects.equals(target.getId(), caller.getId())) {
+            log.warn("Password reset refused for admin='{}': an account cannot reset its own password here",
+                    caller.getUsername());
+            throw new SelfPasswordResetException();
+        }
+
+        target.setPassword(passwordEncoder.encode(request.getNewPassword()));
+        userRepository.save(target);
+
+        int revoked = refreshTokenService.revokeAllFor(target);
+        loginAttemptService.reset(target.getUsername());
+
+        log.info("Password reset by {}='{}' for user id={}: {} live refresh token(s) revoked, login block cleared",
+                caller.getRole() == Role.ROLE_ADMIN ? "admin" : "librarian", caller.getUsername(), target.getId(),
+                revoked);
     }
 
     // ---------- the user directory ----------

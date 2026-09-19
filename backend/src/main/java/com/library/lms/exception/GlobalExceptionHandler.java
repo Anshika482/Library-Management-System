@@ -364,6 +364,37 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Handles an administrator trying to reset their own password through the
+     * staff reset. A 400 that says where to go instead: the message is fixed
+     * text and names the self-service endpoint, nothing about the account.
+     */
+    @ExceptionHandler(SelfPasswordResetException.class)
+    public ResponseEntity<ErrorResponse> handleSelfPasswordReset(SelfPasswordResetException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.BAD_REQUEST.value(),
+                exception.getMessage(),
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorResponse);
+    }
+
+    /**
+     * Handles a password reset the caller's role does not allow - a librarian
+     * naming a member of staff, or a member naming anyone. A fixed literal, like
+     * the other service-level refusals, so nothing about the target account can
+     * reach the response.
+     */
+    @ExceptionHandler(PasswordResetNotAllowedException.class)
+    public ResponseEntity<ErrorResponse> handlePasswordResetNotAllowed(PasswordResetNotAllowedException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.FORBIDDEN.value(),
+                "Access denied",
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(errorResponse);
+    }
+
+    /**
      * Handles a reference to a user account that does not exist.
      *
      * <p><b>404 NOT FOUND</b>, for the same reason as a missing book: the

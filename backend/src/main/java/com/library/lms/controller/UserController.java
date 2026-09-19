@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.library.lms.dto.AdminPasswordResetRequest;
 import com.library.lms.dto.CreateUserRequest;
 import com.library.lms.dto.PagedResponse;
 import com.library.lms.dto.UserResponse;
@@ -131,6 +132,25 @@ public class UserController {
             @PathVariable @Positive(message = "User id must be a positive number") Long userId,
             Authentication authentication) {
         return ResponseEntity.ok(userService.getUser(userId, authentication.getName()));
+    }
+
+    /**
+     * POST /api/users/{userId}/password-reset - sets a new password for someone
+     * who has forgotten theirs.
+     *
+     * <p>Administrators may reset any account of their library but their own;
+     * librarians may reset members only. The account's refresh sessions end and
+     * its login block is cleared. 204 with no body: there is nothing to return,
+     * and a body would only be somewhere for the password to leak into.</p>
+     */
+    @PostMapping("/{userId}/password-reset")
+    public ResponseEntity<Void> resetPassword(
+            @PathVariable @Positive(message = "User id must be a positive number") Long userId,
+            @Valid @RequestBody AdminPasswordResetRequest request,
+            Authentication authentication) {
+        userService.resetPassword(userId, request, authentication.getName());
+
+        return ResponseEntity.noContent().build();
     }
 
     @PatchMapping("/{userId}/status")

@@ -233,6 +233,12 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.HEAD, "/api/users", "/api/users/*")
                                 .hasAnyAuthority(ADMIN, LIBRARIAN)
 
+                        // The staff password reset: administrators and librarians
+                        // both, POST only. UserService then limits librarians to
+                        // members and refuses an administrator's own account.
+                        .requestMatchers(HttpMethod.POST, "/api/users/*/password-reset")
+                                .hasAnyAuthority(ADMIN, LIBRARIAN)
+
                         // Everything else on the path is administrators only, and
                         // no HTTP method is named: these endpoints change who may
                         // use the system, so every other verb is covered rather

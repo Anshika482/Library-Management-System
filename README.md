@@ -256,6 +256,7 @@ and `direction`.
 | `GET /api/users/{userId}` - one account | admin: any account; librarian: members only |
 | `POST /api/users` - creates a member or a librarian | admin |
 | `PATCH /api/users/{userId}/status` - enables, disables, locks or unlocks an account | admin |
+| `POST /api/users/{userId}/password-reset` with `{"newPassword"}` | admin: any account; librarian: members only |
 | `POST /api/libraries` with `{"name", "admin": {"username", "email", "password"}}` | admin |
 
 An administrator cannot disable or lock their own account.
@@ -264,6 +265,13 @@ An administrator cannot disable or lock their own account.
 `accountNonLocked`, and sorts by `id`, `username`, `email` or `role`. The user directory never returns a password or
 its hash. A librarian who filters for administrators or librarians gets 403, and a staff account or another library's
 account is answered with 404, exactly like an id that does not exist. Members have no directory access.
+
+**Forgotten passwords** are reset by staff: `POST /api/users/{userId}/password-reset` sets a new password, 8 to 72
+characters like any other, and answers 204. It ends every refresh session of the account and clears its failed-login
+block, so the owner can sign in straight away. An administrator may reset any account of their library except their
+own (400 - use `POST /api/auth/password`, which asks for the current password); a librarian may reset members only
+(403 for staff); members may reset nobody's. Another library's account is a 404, and neither the password nor its hash
+is ever returned or logged.
 
 ## Provisioning the first library and administrator
 
@@ -325,6 +333,7 @@ on GitHub.
   revoked before they expire, even by logout or a password change.
 - **Refresh-token records** outlive their session by `JWT_REFRESH_TOKEN_RETENTION`, so that reuse of an old
   token is still recognised, and are then swept away. Every instance runs the sweep.
+- **Password recovery** is staff-assisted; there is no self-service reset by email.
 - **Fine payments** are recorded by staff; there is no payment gateway.
 - **Libraries** can be registered by any administrator.
 - **Dates and times** in API responses carry no offset, and one business time zone applies to every library.
