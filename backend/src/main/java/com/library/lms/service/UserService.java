@@ -24,6 +24,7 @@ import com.library.lms.dto.PagedResponse;
 import com.library.lms.dto.UserResponse;
 import com.library.lms.dto.UserStatusRequest;
 import com.library.lms.dto.UserStatusResponse;
+import com.library.lms.entity.AuditAction;
 import com.library.lms.entity.Library;
 import com.library.lms.entity.Role;
 import com.library.lms.entity.User;
@@ -76,12 +77,16 @@ public class UserService {
 
     private final LoginAttemptService loginAttemptService;
 
+    private final AuditService auditService;
+
     public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder,
-            RefreshTokenService refreshTokenService, LoginAttemptService loginAttemptService) {
+            RefreshTokenService refreshTokenService, LoginAttemptService loginAttemptService,
+            AuditService auditService) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.refreshTokenService = refreshTokenService;
         this.loginAttemptService = loginAttemptService;
+        this.auditService = auditService;
     }
 
     /**
@@ -118,6 +123,8 @@ public class UserService {
         Library library = administrator.getLibrary();
 
         if (!ASSIGNABLE_ROLES.contains(request.getRole())) {
+            auditService.recordFailure(AuditAction.USER_CREATED, library.getId(), administrator.getId(),
+                    AuditTarget.none());
             throw new RoleNotAssignableException();
         }
 
@@ -136,6 +143,8 @@ public class UserService {
         user.setLibrary(library);
 
         User saved = userRepository.save(user);
+        auditService.recordSuccess(AuditAction.USER_CREATED, library.getId(), administrator.getId(),
+                AuditTarget.user(saved.getId()));
 
         // Who created whom, and with what role. An account appearing is exactly
         // the kind of event that has to be reconstructable afterwards. The
@@ -182,6 +191,8 @@ public class UserService {
             // token and guessing. Neither password is written, of course.
             log.warn("Password change refused for username='{}': the current password did not match",
                     user.getUsername());
+            auditService.recordFailure(AuditAction.PASSWORD_CHANGED, user.getLibrary().getId(), user.getId(),
+                    AuditTarget.user(user.getId()));
             throw new InvalidCurrentPasswordException();
         }
 
@@ -189,6 +200,8 @@ public class UserService {
         userRepository.save(user);
 
         int revoked = refreshTokenService.revokeAllFor(user);
+        auditService.recordSuccess(AuditAction.PASSWORD_CHANGED, user.getLibrary().getId(), user.getId(),
+                AuditTarget.user(user.getId()));
 
         log.info("Password changed for username='{}': {} live refresh token(s) revoked",
                 user.getUsername(), revoked);
@@ -235,6 +248,8 @@ public class UserService {
         User caller = authenticatedUser(authenticatedUsername);
 
         if (caller.getRole() != Role.ROLE_ADMIN && caller.getRole() != Role.ROLE_LIBRARIAN) {
+            auditService.recordFailure(AuditAction.PASSWORD_RESET_BY_STAFF, caller.getLibrary().getId(),
+                    caller.getId(), AuditTarget.none());
             throw new PasswordResetNotAllowedException();
         }
 
@@ -244,12 +259,16 @@ public class UserService {
         if (caller.getRole() == Role.ROLE_LIBRARIAN && target.getRole() != Role.ROLE_MEMBER) {
             log.warn("Password reset refused for librarian='{}': user id={} is not a member",
                     caller.getUsername(), target.getId());
+            auditService.recordFailure(AuditAction.PASSWORD_RESET_BY_STAFF, caller.getLibrary().getId(),
+                    caller.getId(), AuditTarget.user(target.getId()));
             throw new PasswordResetNotAllowedException();
         }
 
         if (Objects.equals(target.getId(), caller.getId())) {
             log.warn("Password reset refused for admin='{}': an account cannot reset its own password here",
                     caller.getUsername());
+            auditService.recordFailure(AuditAction.PASSWORD_RESET_BY_STAFF, caller.getLibrary().getId(),
+                    caller.getId(), AuditTarget.user(target.getId()));
             throw new SelfPasswordResetException();
         }
 
@@ -258,6 +277,8 @@ public class UserService {
 
         int revoked = refreshTokenService.revokeAllFor(target);
         loginAttemptService.reset(target.getUsername());
+        auditService.recordSuccess(AuditAction.PASSWORD_RESET_BY_STAFF, caller.getLibrary().getId(), caller.getId(),
+                AuditTarget.user(target.getId()));
 
         log.info("Password reset by {}='{}' for user id={}: {} live refresh token(s) revoked, login block cleared",
                 caller.getRole() == Role.ROLE_ADMIN ? "admin" : "librarian", caller.getUsername(), target.getId(),
@@ -486,6 +507,8 @@ public class UserService {
         // the account exactly as it was.
         if (Objects.equals(target.getId(), administrator.getId()) && wouldLockOut(request)) {
             log.warn("Self-lockout refused for admin='{}': user id={}", administrator.getUsername(), target.getId());
+            auditService.recordFailure(AuditAction.USER_STATUS_CHANGED, libraryId, administrator.getId(),
+                    AuditTarget.user(target.getId()));
             throw new SelfLockoutException();
         }
 
@@ -497,6 +520,8 @@ public class UserService {
         }
 
         User saved = userRepository.save(target);
+        auditService.recordSuccess(AuditAction.USER_STATUS_CHANGED, libraryId, administrator.getId(),
+                AuditTarget.user(saved.getId()));
 
         // Who changed whose account, and to what. An administrative change to
         // who may use the system is exactly the kind of event that has to be

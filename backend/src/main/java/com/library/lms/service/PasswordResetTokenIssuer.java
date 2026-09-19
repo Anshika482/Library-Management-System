@@ -20,6 +20,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.library.lms.entity.AuditAction;
 import com.library.lms.entity.PasswordResetToken;
 import com.library.lms.entity.User;
 import com.library.lms.repository.PasswordResetTokenRepository;
@@ -65,6 +66,8 @@ public class PasswordResetTokenIssuer {
 
     private final ApplicationEventPublisher events;
 
+    private final AuditService auditService;
+
     private final Duration validity;
 
     private final Clock clock;
@@ -79,12 +82,13 @@ public class PasswordResetTokenIssuer {
      */
     @Autowired
     public PasswordResetTokenIssuer(PasswordResetTokenRepository tokenRepository, UserRepository userRepository,
-            ApplicationEventPublisher events, @Value("${" + VALIDITY_PROPERTY + "}") Duration validity) {
-        this(tokenRepository, userRepository, events, validity, Clock.systemDefaultZone());
+            ApplicationEventPublisher events, AuditService auditService,
+            @Value("${" + VALIDITY_PROPERTY + "}") Duration validity) {
+        this(tokenRepository, userRepository, events, auditService, validity, Clock.systemDefaultZone());
     }
 
     PasswordResetTokenIssuer(PasswordResetTokenRepository tokenRepository, UserRepository userRepository,
-            ApplicationEventPublisher events, Duration validity, Clock clock) {
+            ApplicationEventPublisher events, AuditService auditService, Duration validity, Clock clock) {
         if (validity == null || validity.isZero() || validity.isNegative() || validity.compareTo(MAX_VALIDITY) > 0) {
             throw new IllegalStateException(VALIDITY_PROPERTY + " must be a positive duration of at most PT24H,"
                     + " such as PT30M. Set PASSWORD_RESET_TOKEN_VALIDITY, or leave it unset for the default.");
@@ -93,6 +97,7 @@ public class PasswordResetTokenIssuer {
         this.tokenRepository = tokenRepository;
         this.userRepository = userRepository;
         this.events = events;
+        this.auditService = auditService;
         this.validity = validity;
         this.clock = clock;
     }
@@ -103,8 +108,8 @@ public class PasswordResetTokenIssuer {
      *
      * <ol>
      *   <li>No account with the address: nothing is written.</li>
-     *   <li>A disabled or locked account: nothing is written. A reset would not
-     *       let it sign in.</li>
+     *   <li>A disabled or locked account: no token is written, only an audit
+     *       record of the refusal. A reset would not let it sign in.</li>
      *   <li>Otherwise every earlier unused token of the account is spent, a new
      *       one is stored as a hash, and a {@link PasswordResetRequested} event
      *       carries the token to delivery - after this transaction commits, for
@@ -126,6 +131,8 @@ public class PasswordResetTokenIssuer {
 
         if (!user.isEnabled() || !user.isAccountNonLocked()) {
             log.info("Password reset not issued for user id={}: the account is disabled or locked", user.getId());
+            auditService.recordFailure(AuditAction.PASSWORD_RESET_REQUESTED, user.getLibrary().getId(), null,
+                    AuditTarget.user(user.getId()));
             return;
         }
 
@@ -140,6 +147,8 @@ public class PasswordResetTokenIssuer {
         stored.setCreatedAt(now);
         stored.setExpiresAt(now.plus(validity));
         tokenRepository.save(stored);
+        auditService.recordSuccess(AuditAction.PASSWORD_RESET_REQUESTED, user.getLibrary().getId(), null,
+                AuditTarget.user(user.getId()));
 
         events.publishEvent(new PasswordResetRequested(user.getId(), user.getEmail(), token, stored.getExpiresAt()));
 

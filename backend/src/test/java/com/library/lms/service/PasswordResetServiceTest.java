@@ -52,7 +52,8 @@ class PasswordResetServiceTest {
 
     private final LoginAttemptService loginAttempts = mock(LoginAttemptService.class);
 
-    private final UserService service = new UserService(users, encoder, refreshTokens, loginAttempts);
+    private final UserService service = new UserService(users, encoder, refreshTokens, loginAttempts,
+            mock(AuditService.class));
 
     private Library library;
 

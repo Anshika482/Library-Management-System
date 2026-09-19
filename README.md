@@ -17,6 +17,7 @@ Built with Spring Boot 3.5 on Java 21, MySQL 8, Flyway and JWT authentication.
 - [Health probes](#health-probes)
 - [Authentication](#authentication)
 - [Endpoints](#endpoints)
+- [Audit log](#audit-log)
 - [Provisioning the first library and administrator](#provisioning-the-first-library-and-administrator)
 - [CORS](#cors)
 - [Continuous integration](#continuous-integration)
@@ -34,6 +35,8 @@ Built with Spring Boot 3.5 on Java 21, MySQL 8, Flyway and JWT authentication.
   new libraries with their first administrator; everyone can change their own password.
 - **Security** - JWT access tokens with rotating refresh tokens, login rate limiting, configurable CORS, and startup
   checks that refuse unsafe production configuration.
+- **Audit log** - every change to accounts, passwords and libraries is recorded in its library's audit log, refusals
+  included.
 
 ## Technology
 
@@ -158,6 +161,7 @@ starts; Hibernate then only validates the schema.
 | `V2__fine_payment_tracking.sql` | fine payment status, time and recording staff member on `transactions` |
 | `V3__refresh_tokens.sql` | `refresh_tokens`, which holds token hashes, never tokens |
 | `V4__password_reset_tokens.sql` | `password_reset_tokens`, which holds reset-token hashes, never tokens |
+| `V5__audit_events.sql` | `audit_events`, the audit log: ids, action names and times only |
 
 - The database must already exist, and the account needs rights to create and alter tables in it.
 - An applied migration is never edited: Flyway checksums it and refuses to start if it changed. A schema change is a new
@@ -290,6 +294,32 @@ own (400 - use `POST /api/auth/password`, which asks for the current password); 
 (403 for staff); members may reset nobody's. Another library's account is a 404, and neither the password nor its hash
 is ever returned or logged.
 
+## Audit log
+
+Changes to accounts, passwords and libraries are recorded in `audit_events`: who did it (their account id), what
+(an action name), to which record (a user or a library, by id), in which library, when, and whether it went through.
+
+| Action | Recorded when |
+|---|---|
+| `USER_CREATED` | an administrator creates an account; refused when asking for a role that cannot be assigned |
+| `USER_STATUS_CHANGED` | an account is enabled, disabled, locked or unlocked; refused on self-lockout |
+| `PASSWORD_CHANGED` | an account holder changes their own password; refused on a wrong current password |
+| `PASSWORD_RESET_BY_STAFF` | staff reset someone's password; refused for staff targets and self-reset |
+| `PASSWORD_RESET_REQUESTED` | a self-service reset token is issued; refused for a disabled or locked account |
+| `PASSWORD_RESET_COMPLETED` | a reset token is redeemed; refused when used, expired or its account disabled |
+| `LIBRARY_CREATED` | an administrator registers a library - recorded in the creator's library |
+| `LIBRARY_BOOTSTRAPPED` | the first library is created at startup - recorded in that library |
+
+- **Nothing secret can be stored.** Every column is an id, an action name or a time; there is no free text, so no
+  password, hash, token or address can reach the audit log.
+- **Library-scoped.** Every event belongs to the library the change happened in and is read through that library only.
+  The repository can append events and read one library's events; it cannot change, delete or list them all.
+- **In step with the change.** A successful change and its event commit together or not at all. A refusal is recorded
+  in a transaction of its own, so the refusal's rollback does not erase it.
+- **Actor.** The signed-in account that made the change. Self-service resets and the startup bootstrap have none.
+- **Not recorded:** reads, and attempts that name no existing account (an unknown email or reset token), which have no
+  library to belong to. A member stopped by the security rules never reaches the code that records.
+
 ## Provisioning the first library and administrator
 
 Every endpoint that creates an account needs an administrator who is already signed in, and the migrations seed no
@@ -351,6 +381,7 @@ on GitHub.
   revoked before they expire, even by logout or a password change.
 - **Refresh-token records** outlive their session by `JWT_REFRESH_TOKEN_RETENTION`, so that reuse of an old
   token is still recognised, and are then swept away. Every instance runs the sweep.
+- **Audit log** has no API yet: events are recorded and kept, but read only from the database. Nothing purges them.
 - **Reset links are not delivered yet.** Forgot-password issues tokens, but no email is sent, so until a sender is
   added a forgotten password is reset by staff with `POST /api/users/{userId}/password-reset`.
 - **Forgot-password queue.** Issuing runs on one background thread with room for 500 waiting requests; beyond

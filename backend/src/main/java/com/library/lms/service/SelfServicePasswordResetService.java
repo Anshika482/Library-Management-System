@@ -13,6 +13,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.library.lms.entity.AuditAction;
 import com.library.lms.entity.PasswordResetToken;
 import com.library.lms.entity.User;
 import com.library.lms.exception.InvalidPasswordResetTokenException;
@@ -75,6 +76,8 @@ public class SelfServicePasswordResetService {
 
     private final LoginAttemptService loginAttemptService;
 
+    private final AuditService auditService;
+
     private final Duration retention;
 
     private final Clock clock;
@@ -90,15 +93,16 @@ public class SelfServicePasswordResetService {
             PasswordResetIssuingQueue issuingQueue, PasswordResetTokenIssuer tokenIssuer,
             PasswordResetTokenRepository tokenRepository, UserRepository userRepository,
             PasswordEncoder passwordEncoder, RefreshTokenService refreshTokenService,
-            LoginAttemptService loginAttemptService, @Value("${" + RETENTION_PROPERTY + "}") Duration retention) {
+            LoginAttemptService loginAttemptService, AuditService auditService,
+            @Value("${" + RETENTION_PROPERTY + "}") Duration retention) {
         this(requestLimiter, issuingQueue, tokenIssuer, tokenRepository, userRepository, passwordEncoder,
-                refreshTokenService, loginAttemptService, retention, Clock.systemDefaultZone());
+                refreshTokenService, loginAttemptService, auditService, retention, Clock.systemDefaultZone());
     }
 
     SelfServicePasswordResetService(PasswordResetRequestLimiter requestLimiter, PasswordResetIssuingQueue issuingQueue,
             PasswordResetTokenIssuer tokenIssuer, PasswordResetTokenRepository tokenRepository,
             UserRepository userRepository, PasswordEncoder passwordEncoder, RefreshTokenService refreshTokenService,
-            LoginAttemptService loginAttemptService, Duration retention, Clock clock) {
+            LoginAttemptService loginAttemptService, AuditService auditService, Duration retention, Clock clock) {
         if (retention == null || retention.isZero() || retention.isNegative()) {
             throw new IllegalStateException(RETENTION_PROPERTY + " must be a positive duration, such as P1D."
                     + " Set PASSWORD_RESET_TOKEN_RETENTION, or leave it unset for the default.");
@@ -112,6 +116,7 @@ public class SelfServicePasswordResetService {
         this.passwordEncoder = passwordEncoder;
         this.refreshTokenService = refreshTokenService;
         this.loginAttemptService = loginAttemptService;
+        this.auditService = auditService;
         this.retention = retention;
         this.clock = clock;
     }
@@ -175,16 +180,19 @@ public class SelfServicePasswordResetService {
 
         if (presented.getUsedAt() != null) {
             log.warn("A used or superseded password reset token was presented for user id={}", user.getId());
+            recordRefusedRedemption(user);
             throw new InvalidPasswordResetTokenException();
         }
 
         if (!now.isBefore(presented.getExpiresAt())) {
             log.info("An expired password reset token was presented for user id={}", user.getId());
+            recordRefusedRedemption(user);
             throw new InvalidPasswordResetTokenException();
         }
 
         if (!user.isEnabled() || !user.isAccountNonLocked()) {
             log.warn("Password reset refused for user id={}: the account is disabled or locked", user.getId());
+            recordRefusedRedemption(user);
             throw new InvalidPasswordResetTokenException();
         }
 
@@ -196,6 +204,8 @@ public class SelfServicePasswordResetService {
 
         int revoked = refreshTokenService.revokeAllFor(user);
         loginAttemptService.reset(user.getUsername());
+        auditService.recordSuccess(AuditAction.PASSWORD_RESET_COMPLETED, user.getLibrary().getId(), null,
+                AuditTarget.user(user.getId()));
 
         log.info("Password reset completed for user id={}: {} live refresh token(s) revoked, login block cleared",
                 user.getId(), revoked);
@@ -245,6 +255,16 @@ public class SelfServicePasswordResetService {
                 removed);
 
         return removed;
+    }
+
+    /**
+     * A token that named a real account but could not be used. No actor: nobody
+     * is signed in, and presenting a token proves nothing about who presents it.
+     * A token that matches no stored row names no account and is not recorded.
+     */
+    private void recordRefusedRedemption(User user) {
+        auditService.recordFailure(AuditAction.PASSWORD_RESET_COMPLETED, user.getLibrary().getId(), null,
+                AuditTarget.user(user.getId()));
     }
 
     private LocalDateTime now() {

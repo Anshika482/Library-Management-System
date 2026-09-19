@@ -35,6 +35,7 @@ import org.mockito.InOrder;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
+import com.library.lms.entity.Library;
 import com.library.lms.entity.PasswordResetToken;
 import com.library.lms.entity.Role;
 import com.library.lms.entity.User;
@@ -84,7 +85,7 @@ class SelfServicePasswordResetServiceTest {
 
     private SelfServicePasswordResetService service(Duration retention) {
         return new SelfServicePasswordResetService(limiter, queue, issuer, tokens, users, encoder, refreshTokens,
-                loginAttempts, retention, FIXED);
+                loginAttempts, mock(AuditService.class), retention, FIXED);
     }
 
     private final SelfServicePasswordResetService service = service(RETENTION);
@@ -94,8 +95,12 @@ class SelfServicePasswordResetServiceTest {
     }
 
     private static User account(boolean enabled, boolean accountNonLocked) {
+        Library library = new Library();
+        library.setId(7L);
+
         User user = new User();
         user.setId(42L);
+        user.setLibrary(library);
         user.setUsername("reader");
         user.setEmail(EMAIL);
         user.setRole(Role.ROLE_MEMBER);

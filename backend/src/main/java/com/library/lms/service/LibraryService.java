@@ -10,6 +10,7 @@ import com.library.lms.dto.CreateLibraryRequest;
 import com.library.lms.dto.FirstAdminRequest;
 import com.library.lms.dto.LibraryResponse;
 import com.library.lms.dto.UserResponse;
+import com.library.lms.entity.AuditAction;
 import com.library.lms.entity.Library;
 import com.library.lms.entity.Role;
 import com.library.lms.entity.User;
@@ -49,11 +50,14 @@ public class LibraryService {
 
     private final PasswordEncoder passwordEncoder;
 
+    private final AuditService auditService;
+
     public LibraryService(LibraryRepository libraryRepository, UserRepository userRepository,
-            PasswordEncoder passwordEncoder) {
+            PasswordEncoder passwordEncoder, AuditService auditService) {
         this.libraryRepository = libraryRepository;
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
+        this.auditService = auditService;
     }
 
     /**
@@ -91,6 +95,11 @@ public class LibraryService {
 
         LibraryResponse created = create(request);
 
+        // Recorded in the creator's library: that is where the change was made,
+        // and whose administrators answer for it.
+        auditService.recordSuccess(AuditAction.LIBRARY_CREATED, creator.getLibrary().getId(), creator.getId(),
+                AuditTarget.library(created.getId()));
+
         // Who created which library and which administrator, by id. A new tenant
         // and a new administrator appearing are exactly the events that have to
         // be reconstructable. Names are left out because they are whatever the
@@ -123,7 +132,13 @@ public class LibraryService {
      */
     @Transactional
     public LibraryResponse createFirstLibrary(CreateLibraryRequest request) {
-        return create(request);
+        LibraryResponse created = create(request);
+
+        // Nobody was signed in: the actor is the configuration, recorded as no one.
+        auditService.recordSuccess(AuditAction.LIBRARY_BOOTSTRAPPED, created.getId(), null,
+                AuditTarget.library(created.getId()));
+
+        return created;
     }
 
     /**

@@ -81,6 +81,9 @@ class PasswordResetTokenCleanupIntegrationTest {
     @Autowired
     private LoginAttemptService loginAttemptService;
 
+    @Autowired
+    private AuditService auditService;
+
     /** The application's own service - transactional, on the system clock - for redeeming. */
     @Autowired
     private SelfServicePasswordResetService liveService;
@@ -115,7 +118,7 @@ class PasswordResetTokenCleanupIntegrationTest {
         sweepTime = LocalDateTime.now(fixed);
         cutoff = sweepTime.minus(RETENTION);
         sweepingAt = new SelfServicePasswordResetService(limiter, queue, issuer, tokenRepository, userRepository,
-                passwordEncoder, refreshTokenService, loginAttemptService, RETENTION, fixed);
+                passwordEncoder, refreshTokenService, loginAttemptService, auditService, RETENTION, fixed);
     }
 
     /** A stored token for the member, written the way the application writes one. */

@@ -25,6 +25,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
 
+import com.library.lms.entity.Library;
 import com.library.lms.entity.PasswordResetToken;
 import com.library.lms.entity.Role;
 import com.library.lms.entity.User;
@@ -52,14 +53,18 @@ class PasswordResetTokenIssuerTest {
     private final ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
 
     private PasswordResetTokenIssuer issuer(Duration validity) {
-        return new PasswordResetTokenIssuer(tokens, users, events, validity, FIXED);
+        return new PasswordResetTokenIssuer(tokens, users, events, mock(AuditService.class), validity, FIXED);
     }
 
     private final PasswordResetTokenIssuer issuer = issuer(VALIDITY);
 
     private static User account(boolean enabled, boolean accountNonLocked) {
+        Library library = new Library();
+        library.setId(7L);
+
         User user = new User();
         user.setId(42L);
+        user.setLibrary(library);
         user.setUsername("reader");
         user.setEmail(EMAIL);
         user.setRole(Role.ROLE_MEMBER);
