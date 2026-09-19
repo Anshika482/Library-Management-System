@@ -24,7 +24,10 @@ import com.library.lms.repository.UserRepository;
  *
  * <p>That the caller is an administrator is decided by the filter chain, which
  * requires the ADMIN authority for every method on {@code /api/libraries/**}.
- * This service is reached only after that.</p>
+ * This service is reached only after that. The one exception is
+ * {@link #createFirstLibrary(CreateLibraryRequest)}, which no controller calls:
+ * it exists for the startup bootstrap of an empty database, where there is no
+ * administrator yet to require.</p>
  *
  * <p><b>A library and its first administrator arrive together or not at
  * all.</b> A library with no account in it is unusable - nobody can log in to
@@ -86,6 +89,56 @@ public class LibraryService {
         User creator = userRepository.findByUsername(authenticatedUsername)
                 .orElseThrow(() -> new UserNotFoundException(authenticatedUsername));
 
+        LibraryResponse created = create(request);
+
+        // Who created which library and which administrator, by id. A new tenant
+        // and a new administrator appearing are exactly the events that have to
+        // be reconstructable. Names are left out because they are whatever the
+        // caller typed, and no password or hash is ever written here.
+        log.info("Library created by admin='{}' of library id={}: new library id={} with first admin id={}",
+                creator.getUsername(), creator.getLibrary().getId(), created.getId(), created.getAdmin().getId());
+
+        return created;
+    }
+
+    /**
+     * Creates the very first library and administrator of an empty database.
+     *
+     * <p><b>No creator, because there is none.</b> Every other way into this
+     * service needs an administrator who is already signed in, which leaves a
+     * fresh deployment with no way to make its first one. This method is that
+     * way in, and the rules are otherwise identical: the same transaction, the
+     * same uniqueness checks, the same BCrypt encoder, the same fixed ADMIN role
+     * and new library.</p>
+     *
+     * <p><b>It is not reachable over HTTP.</b> No controller calls it. Its one
+     * caller is {@code FirstAdminBootstrap}, which runs at startup and only
+     * after finding the account table empty - that check, not this method, is
+     * what stops a second administrator appearing out of configuration.</p>
+     *
+     * @param request the library and its first administrator
+     * @return the new library and its administrator
+     * @throws DuplicateLibraryException if a library already has that name
+     * @throws DuplicateAccountException if the username or email is taken
+     */
+    @Transactional
+    public LibraryResponse createFirstLibrary(CreateLibraryRequest request) {
+        return create(request);
+    }
+
+    /**
+     * Writes the library and its administrator, in one transaction.
+     *
+     * <p><b>The name</b> is trimmed first, so surrounding spaces cannot make a
+     * second "Central Library", and the check ignores case for the same reason.
+     * The check turns an ordinary clash into a clear 400; the unique index on
+     * the column is the actual guarantee.</p>
+     *
+     * <p>The library row is written before the account is checked, so a taken
+     * username or email is refused after that row exists - and the exception
+     * rolls it back, leaving no library that nobody can log in to.</p>
+     */
+    private LibraryResponse create(CreateLibraryRequest request) {
         String name = request.getName().trim();
 
         if (libraryRepository.existsByNameIgnoreCase(name)) {
@@ -98,13 +151,6 @@ public class LibraryService {
         Library savedLibrary = libraryRepository.save(library);
 
         User firstAdmin = createFirstAdmin(request.getAdmin(), savedLibrary);
-
-        // Who created which library and which administrator, by id. A new tenant
-        // and a new administrator appearing are exactly the events that have to
-        // be reconstructable. Names are left out because they are whatever the
-        // caller typed, and no password or hash is ever written here.
-        log.info("Library created by admin='{}' of library id={}: new library id={} with first admin id={}",
-                creator.getUsername(), creator.getLibrary().getId(), savedLibrary.getId(), firstAdmin.getId());
 
         return new LibraryResponse(
                 savedLibrary.getId(),

@@ -270,6 +270,16 @@
                 both are required with no fallback. Their values are plainly
                 labelled test names that no real deployment would use, so a
                 token minted in a test is refused everywhere else.
+
+                The BOOTSTRAP_ADMIN_* values exist because a context that starts
+                against a schema with no accounts must create its first
+                administrator, and refuses to start without these settings -
+                exactly as production does. Some test classes use schemas of
+                their own that begin empty; with these values they bootstrap a
+                plainly labelled test administrator once and skip it on every
+                later run. The password is a dummy that is valid under the API's
+                rules and protects nothing outside a throwaway test schema. A
+                test that needs different values overrides them itself.
             -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -281,6 +291,10 @@
                         <JWT_SECRET>test-only-jwt-signing-secret-not-used-by-any-environment</JWT_SECRET>
                         <JWT_ISSUER>test-only-jwt-issuer</JWT_ISSUER>
                         <JWT_AUDIENCE>test-only-jwt-audience</JWT_AUDIENCE>
+                        <BOOTSTRAP_ADMIN_LIBRARY>Test-only Bootstrap Library</BOOTSTRAP_ADMIN_LIBRARY>
+                        <BOOTSTRAP_ADMIN_USERNAME>test-only-bootstrap-admin</BOOTSTRAP_ADMIN_USERNAME>
+                        <BOOTSTRAP_ADMIN_EMAIL>test-only-bootstrap-admin@example.invalid</BOOTSTRAP_ADMIN_EMAIL>
+                        <BOOTSTRAP_ADMIN_PASSWORD>test-only-bootstrap-password</BOOTSTRAP_ADMIN_PASSWORD>
                     </environmentVariables>
                 </configuration>
             </plugin>

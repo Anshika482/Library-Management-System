@@ -93,7 +93,7 @@ export DB_PASSWORD='<your local MySQL password>'
 - The JWT settings and the `Asia/Kolkata` time zone for the test JVM come from `pom.xml`.
 - Integration tests use throwaway schemas whose names start with `library_db_` - never the development database. A
   guard test fails any test that starts a Spring context without choosing one. The schemas are created on demand and
-  kept between runs, except the Flyway test's, which it drops.
+  kept between runs, except the Flyway and first-administrator tests' own, which they drop.
 
 ## Profiles
 
@@ -130,6 +130,10 @@ rate or refresh-token lifetime are invalid. The production profile also refuses 
 | `JWT_REFRESH_TOKEN_VALIDITY` | no | `P7D` | Login session lifetime, as an ISO-8601 duration |
 | `JWT_REFRESH_TOKEN_RETENTION` | no | `P30D` | How long ended sessions are kept; at least the session lifetime |
 | `JWT_REFRESH_TOKEN_CLEANUP_INTERVAL` | no | `PT1H` | How often ended sessions are swept away |
+| `BOOTSTRAP_ADMIN_LIBRARY` | first start | - | Name of the first library, created when there are no accounts |
+| `BOOTSTRAP_ADMIN_USERNAME` | first start | - | Username of its first administrator |
+| `BOOTSTRAP_ADMIN_EMAIL` | first start | - | Email of its first administrator |
+| `BOOTSTRAP_ADMIN_PASSWORD` | first start | - | Password of its first administrator; 8 to 72 characters |
 
 `backend/.env.example` lists them all with placeholders. Copy it to `backend/.env`, which git ignores, and fill it in;
 never commit real values.
@@ -256,21 +260,29 @@ An administrator cannot disable or lock their own account.
 
 ## Provisioning the first library and administrator
 
-Every endpoint that creates an account needs an administrator who is already signed in: `POST /api/libraries`
-registers a library together with its first administrator, and `POST /api/users` adds members and librarians to the
-administrator's own library - it cannot create administrators. The migrations seed no library and no account, so on a
-fresh production database the first library and administrator have to be created in the database by an operator.
+Every endpoint that creates an account needs an administrator who is already signed in, and the migrations seed no
+account. The first library and administrator are therefore created at startup, from the environment:
 
-What those rows must satisfy, from `V1__initial_schema.sql` and the application:
+1. Set `BOOTSTRAP_ADMIN_LIBRARY`, `BOOTSTRAP_ADMIN_USERNAME`, `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD`.
+2. Start the application against the empty database. It finds no accounts, creates the library and its administrator
+   in one transaction, and logs the new ids and username.
+3. Sign in as that administrator. From then on every library and account is created through the API: `POST
+   /api/libraries` registers a library with its first administrator, and `POST /api/users` adds members and
+   librarians.
 
-- `libraries`: `name` unique and at most 100 characters; `created_at` required.
-- `users`: `username` and `email` each unique; `password` a BCrypt hash - the application checks passwords with Spring
-  Security's `BCryptPasswordEncoder` and never stores plain text; `role` set to `ROLE_ADMIN`; `library_id` the id of the
-  library; `created_at` required; `enabled` and `account_non_locked` default to true.
-- `created_at` values are UTC - see [Time zone and date storage](#time-zone-and-date-storage).
+How the bootstrap behaves:
 
-This project ships no bootstrap script or endpoint for this step. Once one administrator exists, every further library
-and account is created through the API.
+- **Only into an empty database.** If a single account exists it does nothing and does not read the variables, so they
+  can stay blank - or stay set - on every later start. Configuration cannot add an administrator to a database that
+  already has one.
+- **All four or none.** With no accounts, a missing or invalid value stops startup with a message naming the variable
+  and the rule it broke, never its value. The rules are the API's: username 3 to 255 characters, a valid email,
+  password 8 to 72 characters, library name at most 100.
+- **Always an administrator of the new library.** There is no setting for a role or a library id.
+- **Stored like any other account.** The password goes through the application's BCrypt encoder; neither it, its hash
+  nor the email is ever logged.
+- **Several instances starting together** are safe: the unique username index lets one create the account, and the
+  others find the table no longer empty and carry on.
 
 ## CORS
 
