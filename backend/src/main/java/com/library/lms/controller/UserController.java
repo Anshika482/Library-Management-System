@@ -127,6 +127,19 @@ public class UserController {
      * same, so the endpoint cannot be used to learn which ids belong to staff or
      * to other libraries.</p>
      */
+    /**
+     * GET /api/users/me - the signed-in account's own profile.
+     *
+     * <p>Open to every signed-in account, members included: login returns only
+     * tokens, and this is how a client learns its own id - which the member's
+     * own loan history, {@code GET /api/transactions/user/{userId}}, needs. The
+     * account is always the caller's; nothing here names anyone else.</p>
+     */
+    @GetMapping("/me")
+    public ResponseEntity<UserResponse> getOwnAccount(Authentication authentication) {
+        return ResponseEntity.ok(userService.getOwnAccount(authentication.getName()));
+    }
+
     @GetMapping("/{userId}")
     public ResponseEntity<UserResponse> getUser(
             @PathVariable @Positive(message = "User id must be a positive number") Long userId,

@@ -273,6 +273,7 @@ and `direction`.
 | `POST /api/transactions/{id}/fine-payment` - records a payment taken by staff | admin, librarian |
 | `GET /api/transactions/{id}`, `/api/transactions/user/{userId}` | staff; members see only their own |
 | `GET /api/transactions/book/{bookId}`, `/api/transactions/status/{status}` | admin, librarian |
+| `GET /api/users/me` - your own account, including the id other calls need | any account |
 | `GET /api/users` - lists accounts | admin: every account; librarian: members only |
 | `GET /api/users/{userId}` - one account | admin: any account; librarian: members only |
 | `POST /api/users` - creates a member or a librarian | admin |

@@ -371,6 +371,18 @@ public class UserService {
      * @throws UserNotFoundException              if the account is not there to
      *                                            be seen
      */
+    /**
+     * The caller's own account, whatever their role.
+     *
+     * <p>The same fields as every account response - never the password hash.
+     * An account that is disabled or locked never gets here: its token is
+     * refused before the request reaches a controller.</p>
+     */
+    @Transactional(readOnly = true)
+    public UserResponse getOwnAccount(String authenticatedUsername) {
+        return toResponse(authenticatedUser(authenticatedUsername));
+    }
+
     @Transactional(readOnly = true)
     public UserResponse getUser(Long userId, String authenticatedUsername) {
         User caller = authenticatedUser(authenticatedUsername);

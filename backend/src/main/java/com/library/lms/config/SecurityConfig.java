@@ -227,6 +227,14 @@ public class SecurityConfig {
                         .requestMatchers("/api/transactions/status/**").hasAnyAuthority(ADMIN, LIBRARIAN)
                         .requestMatchers(HttpMethod.GET, "/api/transactions/**").authenticated()
 
+                        // Your own account: any signed-in account, members
+                        // included - it is how a client learns the id its other
+                        // calls need. One exact path, which names nobody else, and
+                        // placed before the directory rule below, whose
+                        // "/api/users/*" would otherwise claim it for staff only.
+                        .requestMatchers(HttpMethod.GET, "/api/users/me").authenticated()
+                        .requestMatchers(HttpMethod.HEAD, "/api/users/me").authenticated()
+
                         // The user directory: reading accounts is open to both
                         // kinds of staff. Librarians need it to find the member
                         // they are issuing a book to; UserService then limits
