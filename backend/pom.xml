@@ -40,6 +40,13 @@
         <jjwt.version>0.13.0</jjwt.version>
 
         <!--
+            GreenMail, the in-process SMTP server the mail tests send to. The 2.x
+            line is the one built against Jakarta Mail 2.1, which is what Spring
+            Boot 3 uses; 1.x targets the older javax.mail and would not run here.
+        -->
+        <greenmail.version>2.1.4</greenmail.version>
+
+        <!--
             The library's business time zone. Due dates, overdue status and
             fines follow the JVM's date, so the JVM is started in this zone for
             the tests and for spring-boot:run rather than inheriting the
@@ -181,6 +188,18 @@
         </dependency>
 
         <!--
+            Mail: the SMTP client that sends password reset links. Jakarta Mail
+            plus Spring's JavaMailSender, configured from spring.mail.* - see
+            application.properties. Nothing is sent unless a host is set, so a
+            development instance that leaves it unset behaves exactly as before.
+            No version tag - the Spring Boot parent manages it.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-mail</artifactId>
+        </dependency>
+
+        <!--
             DevTools: automatically restarts the app when you recompile, so you
             do not have to stop/start the server after every change.
             "optional" means it is never shipped to whoever uses your jar.
@@ -211,6 +230,20 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+            GreenMail: an SMTP server that runs inside the test JVM on a
+            throwaway port. The mail tests need to read what was actually sent -
+            recipient, subject, body - and a mocked JavaMailSender would only
+            show that send() was called. No message ever leaves the machine, and
+            the build needs no SMTP server of its own.
+        -->
+        <dependency>
+            <groupId>com.icegreen</groupId>
+            <artifactId>greenmail-junit5</artifactId>
+            <version>${greenmail.version}</version>
             <scope>test</scope>
         </dependency>
 

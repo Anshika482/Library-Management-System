@@ -97,6 +97,11 @@ jobs:
       # administrator at startup and refuses to start without the
       # BOOTSTRAP_ADMIN_* settings - as a real first deployment would. These are
       # dummy, CI-only values for a throwaway container.
+      #
+      # The prod profile also refuses to start without somewhere to send
+      # password reset links, so MAIL_* and APP_RESET_LINK_BASE_URL are set to
+      # unroutable .invalid values. Nothing in this smoke test asks for a reset,
+      # so no connection to them is ever attempted.
       - name: Start the container with the production profile
         run: |
           docker run -d --name lms --network host \
@@ -110,6 +115,9 @@ jobs:
             -e BOOTSTRAP_ADMIN_USERNAME=ci-only-bootstrap-admin \
             -e BOOTSTRAP_ADMIN_EMAIL=ci-only-bootstrap-admin@example.invalid \
             -e BOOTSTRAP_ADMIN_PASSWORD=ci-only-bootstrap-password \
+            -e MAIL_HOST=smtp.ci-only.invalid \
+            -e MAIL_FROM=ci-only-library@example.invalid \
+            -e APP_RESET_LINK_BASE_URL=https://ci-only.invalid/reset-password \
             library-management-backend:ci
 
       - name: Wait for readiness

@@ -137,6 +137,13 @@ start when:
 | `PASSWORD_RESET_TOKEN_VALIDITY` | no | `PT30M` | How long a self-service reset token works; at most `PT24H` |
 | `PASSWORD_RESET_TOKEN_RETENTION` | no | `P1D` | How long spent reset tokens are kept before they are swept |
 | `PASSWORD_RESET_TOKEN_CLEANUP_INTERVAL` | no | `PT1H` | How often spent reset tokens are swept away |
+| `MAIL_HOST` | production | empty - nothing sent | SMTP server that delivers password reset links |
+| `MAIL_PORT` | no | `587` | SMTP submission port |
+| `MAIL_USERNAME` | no | - | SMTP account; also the fallback From address |
+| `MAIL_PASSWORD` | no | - | That account's password |
+| `MAIL_FROM` | production | `MAIL_USERNAME` | Address reset messages come from |
+| `MAIL_STARTTLS` | no | `true` | Upgrade the SMTP connection to TLS |
+| `APP_RESET_LINK_BASE_URL` | production | empty - nothing sent | Page the reset link points to; the token is added to it |
 | `BOOTSTRAP_ADMIN_LIBRARY` | first start | - | Name of the first library, created when there are no accounts |
 | `BOOTSTRAP_ADMIN_USERNAME` | first start | - | Username of its first administrator |
 | `BOOTSTRAP_ADMIN_EMAIL` | first start | - | Email of its first administrator |
@@ -238,7 +245,8 @@ components or details. No other Actuator endpoint is exposed.
    bits, stored only as a SHA-256, valid for `PASSWORD_RESET_TOKEN_VALIDITY`, and spending any earlier one. Each address
    may ask three times in fifteen minutes; further requests are dropped, with the same 202. The account is looked up
    and the token issued after the answer has been sent, on a small background queue, so the answer takes the same
-   time whether or not the address has an account. No email is sent yet.
+   time whether or not the address has an account. The link is then emailed to the address - see
+   [Delivering reset links](#delivering-reset-links).
 7. **Reset password** - `POST /api/auth/reset-password` with `{"token", "newPassword"}` answers 204 and works once:
    the token is spent, the password is set, every refresh session ends and the login block is cleared. Any token that
    cannot be used - unknown, used, superseded, expired, or of an account since disabled - gets the same 400. A new
@@ -253,6 +261,24 @@ components or details. No other Actuator endpoint is exposed.
   still running is never touched.
 - Login, refresh, logout, forgot-password, reset-password and the health probes are the only endpoints open without
   a token.
+
+### Delivering reset links
+
+The reset link is emailed over SMTP, from `MAIL_FROM` (or `MAIL_USERNAME`) through `MAIL_HOST`, after the token is
+committed. The link is `APP_RESET_LINK_BASE_URL` with the token added as a `token` query parameter, so point it at
+the page that asks for a new password and posts it to `POST /api/auth/reset-password`.
+
+- **Unconfigured means nothing is sent.** With `MAIL_HOST` blank, the request is logged as not delivered - by account
+  id - and no connection is attempted. That is the development and CI default.
+- **Production refuses to start unconfigured.** Under the `prod` profile a blank `MAIL_HOST`, a blank sender address
+  or a blank `APP_RESET_LINK_BASE_URL` stops startup, rather than issuing resets that nobody receives.
+- **A failure to send changes nothing else.** The caller still gets 202, the stored token stays usable until it
+  expires, and the account holder can ask again. Only the failure's type is logged: an SMTP rejection quotes the
+  address it rejected.
+- **Nothing sensitive is logged.** Not the token, the link, the address or the message - the log lines name an
+  account id, as the rest of the reset flow does.
+- **STARTTLS is on by default.** The link is a credential until it is used or expires, and it travels over this
+  connection along with the SMTP password.
 
 ## Endpoints
 
@@ -405,8 +431,9 @@ on GitHub.
   token is still recognised, and are then swept away. Every instance runs the sweep.
 - **Audit log** is read through `GET /api/audit-events` by an administrator of the library it belongs to; there is no
   export, and nothing purges old events.
-- **Reset links are not delivered yet.** Forgot-password issues tokens, but no email is sent, so until a sender is
-  added a forgotten password is reset by staff with `POST /api/users/{userId}/password-reset`.
+- **Reset links need an SMTP server.** Delivery is plain-text email through `MAIL_HOST`; there is no queue of its
+  own, no retry after a failed send, and no bounce handling. A send that fails leaves the token usable, and the
+  account holder asks again - or staff reset it with `POST /api/users/{userId}/password-reset`.
 - **Forgot-password queue.** Issuing runs on one background thread with room for 500 waiting requests; beyond
   that, requests are dropped and answered with the same 202. Requests still queued at shutdown get ten seconds to
   finish. Spent reset tokens are kept for `PASSWORD_RESET_TOKEN_RETENTION` and then swept away.
