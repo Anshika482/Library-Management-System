@@ -5,36 +5,37 @@ import java.time.LocalDateTime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import com.library.lms.dto.ChatResponse;
-import com.library.lms.entity.Library;
-import com.library.lms.entity.User;
 import com.library.lms.exception.UserNotFoundException;
-import com.library.lms.repository.UserRepository;
 
 /**
  * Answering a caller's question, in their own library's context.
  *
- * <p><b>This class is where the context comes from, and it comes from the
- * account.</b> The caller's library, id and role are read from the database
- * using the authenticated name, never from anything they sent, and handed to
- * the {@link AiChatService} as a {@link ChatContext}. An assistant therefore
- * cannot be pointed at another library, whatever a question says, because it is
- * never told another library exists.</p>
+ * <p><b>The context comes from the account, and it comes first.</b>
+ * {@link ChatContextResolver} reads the caller's library, id and role from the
+ * database and hands back a {@link ChatContext}; only then is the assistant
+ * asked anything. An assistant therefore cannot be pointed at another library,
+ * whatever a question says, because it is never told another library
+ * exists.</p>
+ *
+ * <p><b>Deliberately not transactional.</b> The database work happens inside
+ * the resolver's own transaction, which has committed and released its
+ * connection before the assistant is called. That matters once the assistant is
+ * a provider on the far side of the internet: a transaction held across that
+ * call would pin a database connection for the length of a network round trip,
+ * and a provider having a slow day would take the connection pool - and so the
+ * rest of the application - with it. Nothing here writes, so there is nothing
+ * for a transaction to protect.</p>
  *
  * <p><b>Every role may ask.</b> Members, librarians and administrators all
- * reach the assistant; what differs is what a future implementation may tell
- * them, which is why the role travels in the context. Nothing here decides that
- * on the assistant's behalf.</p>
+ * reach the assistant; what differs is what an implementation may tell them,
+ * which is why the role travels in the context.</p>
  *
  * <p><b>The question is not written down.</b> It is passed to the assistant and
  * dropped: it is whatever the caller typed, which may be anything at all, and a
  * log line is the wrong place for it. The log records that an account asked
- * something, by id, and how long the answer was.</p>
- *
- * <p>Read-only: asking a question changes nothing, and nothing about a
- * conversation is stored yet.</p>
+ * something, by id.</p>
  */
 @Service
 public class ChatService {
@@ -43,11 +44,11 @@ public class ChatService {
 
     private final AiChatService assistant;
 
-    private final UserRepository userRepository;
+    private final ChatContextResolver contextResolver;
 
-    public ChatService(AiChatService assistant, UserRepository userRepository) {
+    public ChatService(AiChatService assistant, ChatContextResolver contextResolver) {
         this.assistant = assistant;
-        this.userRepository = userRepository;
+        this.contextResolver = contextResolver;
     }
 
     /**
@@ -57,25 +58,20 @@ public class ChatService {
      * @param authenticatedUsername the caller, from the security context
      * @return the answer, with the assistant that produced it
      * @throws UserNotFoundException if the authenticated name matches no account
+     * @throws com.library.lms.exception.AiChatUnavailableException if the
+     *         assistant's provider cannot answer
      */
-    @Transactional(readOnly = true)
     public ChatResponse reply(String message, String authenticatedUsername) {
-        User caller = userRepository.findByUsername(authenticatedUsername)
-                .orElseThrow(() -> new UserNotFoundException(authenticatedUsername));
+        // In a transaction, which ends when this returns.
+        ChatContext context = contextResolver.resolve(authenticatedUsername);
 
-        Library library = caller.getLibrary();
-        ChatContext context = new ChatContext(
-                library == null ? null : library.getId(),
-                library == null ? null : library.getName(),
-                caller.getId(),
-                caller.getRole());
-
+        // Out of it. This may go over the network and take seconds.
         String reply = assistant.reply(message, context);
 
         // By id, and by length. Never the question, and never the answer: one
         // is the caller's own words and the other may quote them back.
         log.info("Chat answered for user id={} in library id={} assistant='{}' replyLength={}",
-                caller.getId(), context.libraryId(), assistant.name(), reply == null ? 0 : reply.length());
+                context.userId(), context.libraryId(), assistant.name(), reply == null ? 0 : reply.length());
 
         return new ChatResponse(reply, assistant.name(), LocalDateTime.now());
     }

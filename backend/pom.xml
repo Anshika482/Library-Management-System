@@ -39,6 +39,9 @@
         <!-- One version for all three JJWT artifacts; they must always match. -->
         <jjwt.version>0.13.0</jjwt.version>
 
+        <!-- The Anthropic Java SDK, for the assistant's Claude provider. -->
+        <anthropic.version>2.34.0</anthropic.version>
+
         <!--
             GreenMail, the in-process SMTP server the mail tests send to. The 2.x
             line is the one built against Jakarta Mail 2.1, which is what Spring
@@ -185,6 +188,19 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <!--
+            Anthropic SDK: the client for Claude, which answers a member's
+            question when the assistant is configured to use it. The official
+            SDK rather than hand-rolled HTTP, so request shapes and error types
+            come from the vendor rather than from this repository. Nothing is
+            sent unless a provider and key are configured - see ChatConfig.
+        -->
+        <dependency>
+            <groupId>com.anthropic</groupId>
+            <artifactId>anthropic-java</artifactId>
+            <version>${anthropic.version}</version>
         </dependency>
 
         <!--

@@ -106,6 +106,12 @@ jobs:
       # It refuses the sandbox payment gateway too, so the provider is named
       # with dummy CI-only Razorpay credentials. Nothing here asks to pay a
       # fine, so Razorpay is never called.
+      #
+      # Same for the assistant: the prod profile refuses the scripted one, so
+      # the provider is named with a dummy CI-only key. Nothing here asks the
+      # assistant anything, so Anthropic is never called and the key is never
+      # used. The test job above is unaffected - it runs the default profile,
+      # where the assistant is the script and no key exists.
       - name: Start the container with the production profile
         run: |
           docker run -d --name lms --network host \
@@ -125,6 +131,8 @@ jobs:
             -e MAIL_HOST=smtp.ci-only.invalid \
             -e MAIL_FROM=ci-only-library@example.invalid \
             -e APP_RESET_LINK_BASE_URL=https://ci-only.invalid/reset-password \
+            -e CHAT_PROVIDER=anthropic \
+            -e ANTHROPIC_API_KEY=ci-only-assistant-key-for-the-smoke-test \
             library-management-backend:ci
 
       - name: Wait for readiness

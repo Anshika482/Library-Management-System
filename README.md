@@ -123,6 +123,9 @@ start when:
 - the JVM's time zone differs from `APP_TIME_ZONE`, or date-times would not be stored in UTC;
 - `PAYMENT_GATEWAY_PROVIDER` is not `razorpay`, or its key id or secret is missing. The sandbox gateway marks fines
   paid while no money moves, and nothing inside the application would notice, so production refuses to start on it.
+- `CHAT_PROVIDER` is not `anthropic`, or `ANTHROPIC_API_KEY` is missing. The scripted assistant answers from a
+  keyword list, and a deployment left on it has an assistant in name only - every request succeeds, so nothing
+  inside the application reports it.
 
 ## Environment variables
 
@@ -159,6 +162,12 @@ start when:
 | `PAYMENT_GATEWAY_CONNECT_TIMEOUT` | no | `PT3S` | How long to wait for a connection to the provider; zero or less is refused |
 | `PAYMENT_GATEWAY_READ_TIMEOUT` | no | `PT8S` | How long to wait for its answer; zero or less is refused |
 | `PAYMENT_CURRENCY` | no | `INR` | Currency fines are charged in, ISO 4217 |
+| `CHAT_PROVIDER` | production | `scripted` | `anthropic` for Claude, or `scripted`; anything else stops startup |
+| `ANTHROPIC_API_KEY` | production | - | Provider key; read once into the SDK client, never logged or returned |
+| `CHAT_MODEL` | no | `claude-opus-5` | Which Claude model answers |
+| `CHAT_CONNECT_TIMEOUT` | no | `PT5S` | How long to wait for a connection to the provider |
+| `CHAT_READ_TIMEOUT` | no | `PT30S` | How long to wait for its answer |
+| `CHAT_REQUEST_TIMEOUT` | no | `PT45S` | How long the whole call may take, retries included |
 | `BOOTSTRAP_ADMIN_LIBRARY` | first start | - | Name of the first library, created when there are no accounts |
 | `BOOTSTRAP_ADMIN_USERNAME` | first start | - | Username of its first administrator |
 | `BOOTSTRAP_ADMIN_EMAIL` | first start | - | Email of its first administrator |
@@ -389,11 +398,23 @@ also be paid by card, in two steps, by the member who owes it or by staff on the
 `POST /api/chat` with `{"message": "How do I pay a fine?"}` answers one question for any signed-in account, and
 returns `{"reply", "assistant", "answeredAt"}`.
 
-- **Scripted for now.** The assistant behind the endpoint matches keywords against a fixed script and reads no data
-  at all: the same question always gets the same answer, and anything it does not recognise is declined rather than
-  guessed at. No AI provider is called, and none is configured.
-- **Swappable.** Everything above the `AiChatService` interface - the endpoint, validation, the library context,
-  the error handling - is independent of what answers, so a real provider is one new implementation.
+- **Two assistants, one endpoint.** `CHAT_PROVIDER=anthropic` answers with Claude through the official SDK;
+  `scripted`, the default, matches keywords against a fixed script, calls no provider and needs no key. Development
+  and the test suite run on the script, so neither needs a credential and no request leaves the machine. An unknown
+  provider name stops startup, and naming `anthropic` without a key stops it too - an assistant that 503s every
+  question is worse than a deployment that will not start.
+- **Production runs the real assistant or does not start.** Under the `prod` profile a missing, blank or
+  non-`anthropic` provider, or a missing key, stops startup - the script is a development default and must not
+  reach production, where "I cannot answer that yet" to every question looks exactly like a working assistant.
+- **What is sent to the provider.** A system prompt naming the library and whether the caller is staff or a member,
+  and the question itself. No username, email, account id, token, password or hash, and nothing about any other
+  member. The prompt also forbids inventing fines, due dates, opening hours or anything about another member - the
+  model is given no records and is told to send people to staff instead.
+- **The provider is called outside the database transaction.** The caller's context is resolved in a short read-only
+  transaction that commits before the network call begins, so a slow provider cannot hold a database connection.
+- **A provider that fails is a 503.** Timeouts, a refused key, rate limits, server errors and answers with no text
+  all become the same "The assistant is unavailable right now." Nothing the provider said reaches the response or
+  the log - only the failure's type is recorded.
 - **Scoped to the caller's library.** The library, account and role an assistant is given come from the
   authenticated account, never from the request, so a question naming another library is still answered for the
   caller's own. A request body carries nothing but the message.

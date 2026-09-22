@@ -3,8 +3,6 @@ package com.library.lms.service;
 import java.util.List;
 import java.util.Locale;
 
-import org.springframework.stereotype.Service;
-
 /**
  * The assistant until there is a real one: a fixed script, matched on keywords.
  *
@@ -24,12 +22,14 @@ import org.springframework.stereotype.Service;
  * the caller's own. There is no query here that could reach another library,
  * and no way to ask for one.</p>
  *
+ * <p><b>Selected with {@code chat.provider=scripted}</b>, which is the default:
+ * development and CI run on this, so neither needs a provider key.</p>
+ *
  * <p><b>The question is never repeated back.</b> It is matched against keywords
  * and then dropped: it is whatever the caller typed, and an answer that echoes
  * it is a way for one person's words to end up somewhere they did not expect.
  * Nothing here logs it either.</p>
  */
-@Service
 public class ScriptedAiChatService implements AiChatService {
 
     static final String NAME = "scripted";

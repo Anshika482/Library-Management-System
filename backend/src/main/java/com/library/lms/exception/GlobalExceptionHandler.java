@@ -1045,6 +1045,28 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(errorResponse);
     }
 
+    /**
+     * Handles an assistant whose provider could not answer.
+     *
+     * <p>503, like the payment provider's: the request was fine, the provider
+     * was not, and asking again later may work. One sentence for a timeout, a
+     * refused key, a rate limit, a failure and an answer with no text in it -
+     * which of those it was would tell a caller about the deployment's account
+     * with the provider, and none of it is their business.</p>
+     *
+     * @param exception the failure, deliberately never read
+     * @return 503 with a message that carries nothing from the provider
+     */
+    @ExceptionHandler(AiChatUnavailableException.class)
+    public ResponseEntity<ErrorResponse> handleAiChatUnavailable(AiChatUnavailableException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.SERVICE_UNAVAILABLE.value(),
+                "The assistant is unavailable right now.",
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(errorResponse);
+    }
+
     @ExceptionHandler(AuditAccessDeniedException.class)
     public ResponseEntity<ErrorResponse> handleAuditAccessDenied(AuditAccessDeniedException exception) {
         ErrorResponse errorResponse = new ErrorResponse(
