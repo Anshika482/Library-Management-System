@@ -20,6 +20,11 @@ public record AuditTarget(AuditTargetType type, Long id) {
         return new AuditTarget(AuditTargetType.LIBRARY, id);
     }
 
+    /** A loan, by its transaction id. */
+    public static AuditTarget loan(Long id) {
+        return new AuditTarget(AuditTargetType.LOAN, id);
+    }
+
     /** No record - the change was refused before one was identified. */
     public static AuditTarget none() {
         return new AuditTarget(null, null);

@@ -35,8 +35,8 @@ Built with Spring Boot 3.5 on Java 21, MySQL 8, Flyway and JWT authentication.
   new libraries with their first administrator; everyone can change their own password.
 - **Security** - JWT access tokens with rotating refresh tokens, login rate limiting, configurable CORS, and startup
   checks that refuse unsafe production configuration.
-- **Audit log** - every change to accounts, passwords and libraries is recorded in its library's audit log, refusals
-  included, and read back by an administrator through `GET /api/audit-events`.
+- **Audit log** - every change to accounts, passwords, libraries, loans and fines is recorded in its library's audit
+  log, refusals included, and read back by an administrator through `GET /api/audit-events`.
 
 ## Technology
 
@@ -83,6 +83,10 @@ export JWT_AUDIENCE='<a name for this API>'
 The API listens on `http://localhost:8080`. The development profile connects to `library_db` on localhost, creating it
 if it is missing, lets Hibernate update the schema, and does not run Flyway. `mvnw spring-boot:run` starts the JVM in
 `Asia/Kolkata` - see [Time zone and date storage](#time-zone-and-date-storage).
+
+Because development uses `ddl-auto=update`, Hibernate does not reliably widen an existing MySQL `ENUM`. After pulling a
+migration that widens `audit_events.action` or `target_type`, an existing `library_db` may need Flyway to apply the
+migration, or the `audit_events` table to be recreated locally.
 
 ### Tests
 
@@ -169,6 +173,7 @@ starts; Hibernate then only validates the schema.
 | `V3__refresh_tokens.sql` | `refresh_tokens`, which holds token hashes, never tokens |
 | `V4__password_reset_tokens.sql` | `password_reset_tokens`, which holds reset-token hashes, never tokens |
 | `V5__audit_events.sql` | `audit_events`, the audit log: ids, action names and times only |
+| `V6__audit_loan_actions.sql` | Widens the audit action and target enums to cover loans and fines |
 
 - The database must already exist, and the account needs rights to create and alter tables in it.
 - An applied migration is never edited: Flyway checksums it and refuses to start if it changed. A schema change is a new
@@ -324,8 +329,9 @@ is ever returned or logged.
 
 ## Audit log
 
-Changes to accounts, passwords and libraries are recorded in `audit_events`: who did it (their account id), what
-(an action name), to which record (a user or a library, by id), in which library, when, and whether it went through.
+Changes to accounts, passwords, libraries, loans and fines are recorded in `audit_events`: who did it (their account
+id), what (an action name), to which record (a user, a library or a loan, by id), in which library, when, and whether
+it went through.
 
 | Action | Recorded when |
 |---|---|
@@ -337,6 +343,9 @@ Changes to accounts, passwords and libraries are recorded in `audit_events`: who
 | `PASSWORD_RESET_COMPLETED` | a reset token is redeemed; refused when used, expired or its account disabled |
 | `LIBRARY_CREATED` | an administrator registers a library - recorded in the creator's library |
 | `LIBRARY_BOOTSTRAPPED` | the first library is created at startup - recorded in that library |
+| `BOOK_ISSUED` | staff issue a book to a member; refused for an unknown book or member, an ineligible member, or no copy left |
+| `BOOK_RETURNED` | staff take a book back; refused for a loan that is not open, or a copy the library does not own |
+| `FINE_PAID` | staff record that a fine was paid; refused while the book is out, when it is already paid, and when nothing is owed |
 
 - **Nothing secret can be stored.** Every column is an id, an action name or a time; there is no free text, so no
   password, hash, token or address can reach the audit log.
@@ -344,7 +353,14 @@ Changes to accounts, passwords and libraries are recorded in `audit_events`: who
   The repository can append events and read one library's events; it cannot change, delete or list them all.
 - **In step with the change.** A successful change and its event commit together or not at all. A refusal is recorded
   in a transaction of its own, so the refusal's rollback does not erase it.
-- **Actor.** The signed-in account that made the change. Self-service resets and the startup bootstrap have none.
+- **Actor.** The signed-in account that made the change - for a loan, the member of staff who issued, returned or
+  took payment, never the borrower. The borrower is on the loan the event points at. Self-service resets and the
+  startup bootstrap have no actor.
+- **A `LOAN` target id is the transaction id**, the same id `GET /api/transactions/{id}` takes, so
+  `?targetType=LOAN&targetId=42` reads everything that happened to loan 42. A refusal to return or pay carries the
+  id the caller named, whether or not a loan with it exists in their library; a refusal to issue carries no target,
+  because no loan was created. An event never records the fine amount, the member's name or the book's title - the
+  loan row holds those.
 - **Not recorded:** reads, and attempts that name no existing account (an unknown email or reset token), which have no
   library to belong to. A member stopped by the security rules never reaches the code that records.
 

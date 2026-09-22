@@ -32,5 +32,14 @@ public enum AuditAction {
     LIBRARY_CREATED,
 
     /** The first library and administrator were created at startup from configuration. */
-    LIBRARY_BOOTSTRAPPED
+    LIBRARY_BOOTSTRAPPED,
+
+    /** Staff issued a book to a member - or were refused before a loan existed. */
+    BOOK_ISSUED,
+
+    /** Staff took a book back and closed the loan - or were refused. */
+    BOOK_RETURNED,
+
+    /** Staff recorded that a loan's fine was paid - or were refused. */
+    FINE_PAID
 }

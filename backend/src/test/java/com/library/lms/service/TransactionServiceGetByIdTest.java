@@ -65,6 +65,10 @@ class TransactionServiceGetByIdTest {
     @Spy
     private OverduePolicy overduePolicy = new OverduePolicy("1.00");
 
+    /** The audit boundary: what it was told is asserted where it matters, and ignored elsewhere. */
+    @Mock
+    private AuditService auditService;
+
     @InjectMocks
     private TransactionService transactionService;
 

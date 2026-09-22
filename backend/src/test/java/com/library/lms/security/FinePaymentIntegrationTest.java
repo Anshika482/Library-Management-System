@@ -1,6 +1,7 @@
 package com.library.lms.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
@@ -21,6 +22,10 @@ import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.library.lms.entity.Book;
 import com.library.lms.entity.FinePaymentStatus;
@@ -29,10 +34,16 @@ import com.library.lms.entity.Role;
 import com.library.lms.entity.Transaction;
 import com.library.lms.entity.TransactionStatus;
 import com.library.lms.entity.User;
+import com.library.lms.entity.AuditAction;
+import com.library.lms.entity.AuditEvent;
+import com.library.lms.entity.AuditOutcome;
+import com.library.lms.entity.AuditTargetType;
+import com.library.lms.repository.AuditEventRepository;
 import com.library.lms.repository.BookRepository;
 import com.library.lms.repository.LibraryRepository;
 import com.library.lms.repository.TransactionRepository;
 import com.library.lms.repository.UserRepository;
+import com.library.lms.service.TransactionService;
 
 /**
  * Proves a fine's payment is tracked apart from its amount, recorded only by
@@ -97,6 +108,15 @@ class FinePaymentIntegrationTest {
 
     @Autowired
     private PasswordEncoder passwordEncoder;
+
+    @Autowired
+    private AuditEventRepository auditEventRepository;
+
+    @Autowired
+    private TransactionService transactionService;
+
+    @Autowired
+    private PlatformTransactionManager transactionManager;
 
     private record Tenant(Library library, User admin, User librarian, User member, Long bookId,
                           String adminToken, String librarianToken, String memberToken) {
@@ -423,5 +443,144 @@ class FinePaymentIntegrationTest {
         assertFine(json(byOwnStaff), "1.75");
         assertPayment(json(byOwnStaff), FinePaymentStatus.PAID);
         assertThat(stored(loanOfB).getFinePaymentRecordedBy().getId()).isEqualTo(b.librarian().getId());
+    }
+
+    // ---------- what the audit log records about a loan ----------
+
+    /** The library's audit events for one loan, oldest first - the only way the application reads them. */
+    private List<AuditEvent> loanEvents(Tenant tenant, Long loanId) {
+        return auditEventRepository.findByLibraryIdAndTargetTypeAndTargetIdOrderByIdAsc(
+                tenant.library().getId(), AuditTargetType.LOAN, loanId);
+    }
+
+    /** Issues a book through the API and returns the new loan's id. */
+    private long issueThroughApi(Tenant tenant) throws Exception {
+        String body = objectMapper.createObjectNode()
+                .put("bookId", tenant.bookId())
+                .put("memberId", tenant.member().getId())
+                .put("dueDate", today.plusDays(7).toString())
+                .toString();
+
+        MvcResult result = mockMvc.perform(post("/api/transactions/issue")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + tenant.librarianToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andReturn();
+
+        assertThat(status(result)).as("issue").isEqualTo(201);
+        return json(result).path("id").asLong();
+    }
+
+    /** One page of the caller's audit log, as JSON. */
+    private JsonNode auditEvents(String query, String token) throws Exception {
+        MvcResult result = call(get("/api/audit-events" + query), token);
+
+        assertThat(status(result)).as("GET /api/audit-events%s", query).isEqualTo(200);
+        return json(result);
+    }
+
+    @Test
+    void issuingReturningAndPayingAreEachRecordedAgainstTheLoan() throws Exception {
+        long loanId = issueThroughApi(a);
+        Transaction loan = transactionRepository.findById(loanId).orElseThrow();
+        loan.setDueDate(today.minusDays(5));
+        transactionRepository.save(loan);
+
+        assertThat(status(returnLoan(loan, a.librarianToken()))).isEqualTo(200);
+        assertThat(status(pay(loan, a.librarianToken()))).isEqualTo(200);
+
+        assertThat(loanEvents(a, loanId))
+                .as("the loan's whole life, in order")
+                .extracting(AuditEvent::getAction, AuditEvent::getOutcome, AuditEvent::getActorUserId)
+                .containsExactly(
+                        tuple(AuditAction.BOOK_ISSUED, AuditOutcome.SUCCESS, a.librarian().getId()),
+                        tuple(AuditAction.BOOK_RETURNED, AuditOutcome.SUCCESS, a.librarian().getId()),
+                        tuple(AuditAction.FINE_PAID, AuditOutcome.SUCCESS, a.librarian().getId()));
+    }
+
+    @Test
+    void anAdministratorReadsAndFiltersLoanEventsThroughTheAuditApi() throws Exception {
+        long loanId = issueThroughApi(a);
+
+        JsonNode byTarget = auditEvents("?targetType=LOAN&targetId=" + loanId, a.adminToken());
+        assertThat(byTarget.path("totalElements").asLong()).isEqualTo(1);
+
+        JsonNode event = byTarget.path("content").get(0);
+        assertThat(event.path("action").asText()).isEqualTo("BOOK_ISSUED");
+        assertThat(event.path("outcome").asText()).isEqualTo("SUCCESS");
+        assertThat(event.path("targetType").asText()).isEqualTo("LOAN");
+        assertThat(event.path("targetId").asLong()).as("the target id is the transaction id").isEqualTo(loanId);
+        assertThat(event.path("actorUserId").asLong()).isEqualTo(a.librarian().getId());
+
+        assertThat(auditEvents("?action=BOOK_ISSUED&size=50", a.adminToken()).path("totalElements").asLong())
+                .as("the new actions filter like every other one")
+                .isGreaterThanOrEqualTo(1);
+    }
+
+    @Test
+    void aRefusedPaymentIsRecordedAndOutlivesTheRollbackThatReportsIt() throws Exception {
+        Transaction loan = returnedLate(a, 5);
+        assertThat(status(pay(loan, a.librarianToken()))).as("the first payment").isEqualTo(200);
+
+        // The second is refused by the service, which reports it by throwing -
+        // and that rolls its transaction back. A refusal recorded in the same
+        // transaction would go with it; this one is recorded in its own.
+        assertThat(status(pay(loan, a.librarianToken()))).as("the second").isEqualTo(409);
+
+        assertThat(loanEvents(a, loan.getId()))
+                .extracting(AuditEvent::getAction, AuditEvent::getOutcome, AuditEvent::getActorUserId)
+                .as("the payment that went through, and the one that did not")
+                .containsSubsequence(
+                        tuple(AuditAction.FINE_PAID, AuditOutcome.SUCCESS, a.librarian().getId()),
+                        tuple(AuditAction.FINE_PAID, AuditOutcome.FAILURE, a.librarian().getId()));
+
+        assertThat(stored(loan).getFinePaymentRecordedBy().getId())
+                .as("and the second attempt overwrote nothing")
+                .isEqualTo(a.librarian().getId());
+    }
+
+    @Test
+    void aMemberStoppedByTheFilterChainNeverReachesTheCodeThatRecords() throws Exception {
+        Transaction loan = returnedLate(a, 5);
+        int before = loanEvents(a, loan.getId()).size();
+
+        assertThat(status(pay(loan, a.memberToken()))).as("refused before the service is called").isEqualTo(403);
+
+        // The service's own check on members is the second lock, and it does
+        // record - TransactionServiceAuditTest calls it directly to show that.
+        // Over HTTP the chain answers first, so there is nothing to record.
+        assertThat(loanEvents(a, loan.getId())).hasSize(before);
+    }
+
+    @Test
+    void aRolledBackIssueTakesItsEventWithIt() {
+        long before = auditEventRepository
+                .findByLibraryId(a.library().getId(), PageRequest.of(0, 200)).getTotalElements();
+
+        new TransactionTemplate(transactionManager).execute(tx -> {
+            transactionService.issueBook(a.bookId(), a.member().getId(), a.librarian().getUsername(),
+                    today.plusDays(7));
+            tx.setRollbackOnly();
+            return null;
+        });
+
+        assertThat(auditEventRepository.findByLibraryId(a.library().getId(), PageRequest.of(0, 200))
+                .getTotalElements())
+                .as("a loan that was rolled back never happened, and neither did its event")
+                .isEqualTo(before);
+    }
+
+    @Test
+    void aLoanEventBelongsToTheLibraryItHappenedIn() throws Exception {
+        long loanOfA = issueThroughApi(a);
+        long loanOfB = issueThroughApi(b);
+
+        assertThat(loanEvents(a, loanOfB)).as("A's log holds nothing about B's loan").isEmpty();
+        assertThat(loanEvents(b, loanOfA)).as("B's log holds nothing about A's loan").isEmpty();
+
+        JsonNode asAdminOfB = auditEvents("?targetType=LOAN&targetId=" + loanOfA + "&size=50", b.adminToken());
+        assertThat(asAdminOfB.path("totalElements").asLong())
+                .as("and neither administrator can read the other's through the API")
+                .isZero();
     }
 }

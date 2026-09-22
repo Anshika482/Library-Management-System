@@ -177,7 +177,8 @@ class FlywayMigrationIntegrationTest {
                         "2 | fine payment tracking | SQL | true",
                         "3 | refresh tokens | SQL | true",
                         "4 | password reset tokens | SQL | true",
-                        "5 | audit events | SQL | true");
+                        "5 | audit events | SQL | true",
+                        "6 | audit loan actions | SQL | true");
 
         assertThat(jdbcTemplate.queryForList(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = ? ORDER BY table_name",

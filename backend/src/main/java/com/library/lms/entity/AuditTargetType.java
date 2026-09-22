@@ -5,5 +5,8 @@ public enum AuditTargetType {
 
     USER,
 
-    LIBRARY
+    LIBRARY,
+
+    /** A loan: one transaction row, by its id. */
+    LOAN
 }

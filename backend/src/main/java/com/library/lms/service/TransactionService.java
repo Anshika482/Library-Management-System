@@ -20,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.library.lms.dto.PagedResponse;
 import com.library.lms.dto.TransactionResponse;
+import com.library.lms.entity.AuditAction;
 import com.library.lms.entity.Book;
 import com.library.lms.entity.FinePaymentStatus;
 import com.library.lms.entity.Library;
@@ -122,14 +123,23 @@ public class TransactionService {
 
     private final OverduePolicy overduePolicy;
 
+    /**
+     * The audit boundary. Loans and fines are what this library actually does,
+     * and the fine is money, so each of the three writing operations records
+     * what it did or why it refused - by id, like every other event.
+     */
+    private final AuditService auditService;
+
     public TransactionService(TransactionRepository transactionRepository,
                               BookRepository bookRepository,
                               UserRepository userRepository,
-                              OverduePolicy overduePolicy) {
+                              OverduePolicy overduePolicy,
+                              AuditService auditService) {
         this.transactionRepository = transactionRepository;
         this.bookRepository = bookRepository;
         this.userRepository = userRepository;
         this.overduePolicy = overduePolicy;
+        this.auditService = auditService;
     }
 
     /**
@@ -216,8 +226,17 @@ public class TransactionService {
         // library's stock - a write into a tenant they have no business
         // touching. A book belonging elsewhere now fails exactly as one that
         // was never created, so the refusal reveals nothing either way.
+        // Every refusal from here down is recorded, because from here down the
+        // caller's library is known and an event belongs to one. The two due-date
+        // refusals above are not: they happen before any account is read, so
+        // there is no library to record them in - the same rule the account
+        // actions follow.
         Book book = bookRepository.findByIdAndLibraryId(bookId, library.getId())
-                .orElseThrow(() -> new BookNotFoundException(bookId));
+                .orElseThrow(() -> {
+                    auditService.recordFailure(AuditAction.BOOK_ISSUED, library.getId(), user.getId(),
+                            AuditTarget.none());
+                    return new BookNotFoundException(bookId);
+                });
 
         // The borrower, resolved the same way the book is: by id within the
         // caller's own library. A member of another library is therefore not
@@ -225,7 +244,11 @@ public class TransactionService {
         // gets - the refusal says nothing about whether the account exists
         // somewhere else.
         User borrower = userRepository.findByIdAndLibraryId(memberId, library.getId())
-                .orElseThrow(() -> new UserNotFoundException(memberId));
+                .orElseThrow(() -> {
+                    auditService.recordFailure(AuditAction.BOOK_ISSUED, library.getId(), user.getId(),
+                            AuditTarget.none());
+                    return new UserNotFoundException(memberId);
+                });
 
         // Three separate reasons an account cannot take a book home, all
         // answered identically: it is staff rather than a member, it has been
@@ -234,6 +257,7 @@ public class TransactionService {
         if (borrower.getRole() != Role.ROLE_MEMBER
                 || !borrower.isEnabled()
                 || !borrower.isAccountNonLocked()) {
+            auditService.recordFailure(AuditAction.BOOK_ISSUED, library.getId(), user.getId(), AuditTarget.none());
             throw new MemberNotEligibleException();
         }
 
@@ -246,6 +270,7 @@ public class TransactionService {
         // count that is somehow already negative is refused instead of driven
         // further down.
         if (availableCopies == null || availableCopies <= 0) {
+            auditService.recordFailure(AuditAction.BOOK_ISSUED, library.getId(), user.getId(), AuditTarget.none());
             throw new BookNotAvailableException(bookId, book.getTitle());
         }
 
@@ -276,7 +301,15 @@ public class TransactionService {
 
         transaction.setStatus(TransactionStatus.ISSUED);
 
-        return toResponse(transactionRepository.save(transaction), issueDate);
+        Transaction issued = transactionRepository.save(transaction);
+
+        // In this transaction, so the loan and the record of it commit together
+        // or not at all. The actor is the member of staff who issued the book;
+        // the borrower is on the loan row this points at.
+        auditService.recordSuccess(AuditAction.BOOK_ISSUED, library.getId(), user.getId(),
+                AuditTarget.loan(issued.getId()));
+
+        return toResponse(issued, issueDate);
     }
 
     /**
@@ -330,11 +363,22 @@ public class TransactionService {
      */
     @Transactional
     public TransactionResponse returnBook(Long transactionId, String authenticatedUsername) {
-        Long libraryId = authenticatedUser(authenticatedUsername).getLibrary().getId();
+        // The account itself, not just its library id: the audit events below
+        // name whoever took the book back.
+        User staff = authenticatedUser(authenticatedUsername);
+        Long libraryId = staff.getLibrary().getId();
 
+        // The target of every refusal below is the loan the caller named, by the
+        // id they gave. An id belonging to nothing, or to another library, is
+        // recorded the same way - what happened is that this account tried to
+        // close that loan here, and did not.
         Transaction transaction = transactionRepository
                 .findByIdAndLibraryId(transactionId, libraryId)
-                .orElseThrow(() -> new TransactionNotFoundException(transactionId));
+                .orElseThrow(() -> {
+                    auditService.recordFailure(AuditAction.BOOK_RETURNED, libraryId, staff.getId(),
+                            AuditTarget.loan(transactionId));
+                    return new TransactionNotFoundException(transactionId);
+                });
 
         // Only an open loan can be closed: ISSUED, or OVERDUE should a row have
         // been stored that way - an overdue book is the one that most needs to
@@ -342,6 +386,8 @@ public class TransactionService {
         // RETURNED" means a future status such as LOST is refused by default
         // instead of being silently treated as returnable.
         if (!overduePolicy.isOpen(transaction.getStatus())) {
+            auditService.recordFailure(AuditAction.BOOK_RETURNED, libraryId, staff.getId(),
+                    AuditTarget.loan(transactionId));
             throw new ReturnBookNotAllowedException(transactionId, transaction.getStatus());
         }
 
@@ -349,6 +395,8 @@ public class TransactionService {
         // transaction - no second lookup is needed.
         Book book = transaction.getBook();
         if (book == null) {
+            auditService.recordFailure(AuditAction.BOOK_RETURNED, libraryId, staff.getId(),
+                    AuditTarget.loan(transactionId));
             throw new ReturnBookNotAllowedException(
                     "Transaction has no book associated with it (id " + transactionId + ")");
         }
@@ -357,6 +405,8 @@ public class TransactionService {
         Integer totalCopies = book.getTotalCopies();
 
         if (availableCopies == null) {
+            auditService.recordFailure(AuditAction.BOOK_RETURNED, libraryId, staff.getId(),
+                    AuditTarget.loan(transactionId));
             throw new ReturnBookNotAllowedException(
                     "Book has no available copy count recorded, so a copy cannot be restored (book id "
                             + book.getId() + ")");
@@ -367,6 +417,8 @@ public class TransactionService {
         // totalCopies, and a count that exceeds the real stock is corruption
         // that no later operation would notice.
         if (totalCopies != null && availableCopies + 1 > totalCopies) {
+            auditService.recordFailure(AuditAction.BOOK_RETURNED, libraryId, staff.getId(),
+                    AuditTarget.loan(transactionId));
             throw new ReturnBookNotAllowedException(
                     "Returning would leave more copies available than the library owns: book id "
                             + book.getId() + " already has " + availableCopies + " of " + totalCopies);
@@ -386,7 +438,12 @@ public class TransactionService {
         transaction.setFinePaymentStatus(fine.signum() > 0 ? FinePaymentStatus.UNPAID : FinePaymentStatus.NOT_REQUIRED);
         transaction.setStatus(TransactionStatus.RETURNED);
 
-        return toResponse(transactionRepository.save(transaction), returnDate);
+        Transaction returned = transactionRepository.save(transaction);
+
+        auditService.recordSuccess(AuditAction.BOOK_RETURNED, libraryId, staff.getId(),
+                AuditTarget.loan(returned.getId()));
+
+        return toResponse(returned, returnDate);
     }
 
     /**
@@ -435,14 +492,24 @@ public class TransactionService {
         User staff = authenticatedUser(authenticatedUsername);
 
         if (!maySeeAnyUsersActivity(staff)) {
+            // A member reaching this far is the one refusal worth recording
+            // loudest: it is an attempt to clear a fine by saying so.
+            auditService.recordFailure(AuditAction.FINE_PAID, staff.getLibrary().getId(), staff.getId(),
+                    AuditTarget.loan(transactionId));
             throw new TransactionAccessDeniedException();
         }
 
         Transaction transaction = transactionRepository
                 .findByIdAndLibraryId(transactionId, staff.getLibrary().getId())
-                .orElseThrow(() -> new TransactionNotFoundException(transactionId));
+                .orElseThrow(() -> {
+                    auditService.recordFailure(AuditAction.FINE_PAID, staff.getLibrary().getId(), staff.getId(),
+                            AuditTarget.loan(transactionId));
+                    return new TransactionNotFoundException(transactionId);
+                });
 
         if (overduePolicy.isOpen(transaction.getStatus())) {
+            auditService.recordFailure(AuditAction.FINE_PAID, staff.getLibrary().getId(), staff.getId(),
+                    AuditTarget.loan(transactionId));
             throw FinePaymentNotAllowedException.bookStillOut();
         }
 
@@ -451,9 +518,13 @@ public class TransactionService {
                 : paymentStatusFor(transaction.getFineAmount());
 
         if (current == FinePaymentStatus.PAID) {
+            auditService.recordFailure(AuditAction.FINE_PAID, staff.getLibrary().getId(), staff.getId(),
+                    AuditTarget.loan(transactionId));
             throw FinePaymentNotAllowedException.alreadyPaid();
         }
         if (current != FinePaymentStatus.UNPAID) {
+            auditService.recordFailure(AuditAction.FINE_PAID, staff.getLibrary().getId(), staff.getId(),
+                    AuditTarget.loan(transactionId));
             throw FinePaymentNotAllowedException.nothingOwed();
         }
 
@@ -463,8 +534,15 @@ public class TransactionService {
 
         Transaction saved = transactionRepository.save(transaction);
 
+        // In this transaction, so the payment and the record of it stand or fall
+        // together. The amount is not here: the event names the loan, and the
+        // loan row holds what was owed.
+        auditService.recordSuccess(AuditAction.FINE_PAID, staff.getLibrary().getId(), staff.getId(),
+                AuditTarget.loan(saved.getId()));
+
         // Who said the fine was paid, for which loan, and how much. With no
-        // gateway behind it, this line and the row are the whole audit trail.
+        // gateway behind it, this line, the row and the audit event are the
+        // whole trail.
         log.info("Fine payment recorded by username='{}': transaction id={} amount={} library id={}",
                 staff.getUsername(), saved.getId(), saved.getFineAmount(), staff.getLibrary().getId());
 
