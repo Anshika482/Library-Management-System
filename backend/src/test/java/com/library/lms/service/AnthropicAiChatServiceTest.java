@@ -139,9 +139,62 @@ class AnthropicAiChatServiceTest {
         String prompt = AnthropicAiChatService.systemPrompt(MEMBER);
 
         assertThat(prompt)
-                .contains("no library records")
+                .contains("You can look nothing up")
                 .contains("Never state a specific fine amount")
                 .contains("Never say anything about another member");
+    }
+
+    // ---------- the catalogue, when one was looked up ----------
+
+    /** A context carrying what the caller's own library holds. */
+    private static ChatContext withBooks(BookFact... books) {
+        return MEMBER.withCatalogue(new CatalogueLookup(CatalogueIntent.TITLE, "dune", List.of(books)));
+    }
+
+    @Test
+    void theBooksFoundAreTheOnlyOnesTheModelIsGiven() {
+        String prompt = AnthropicAiChatService.systemPrompt(
+                withBooks(new BookFact("Dune", "Frank Herbert", "Science Fiction", "978", 2, 3)));
+
+        assertThat(prompt)
+                .contains("Dune")
+                .contains("Frank Herbert")
+                .contains("2 of 3 copies available now")
+                .contains("the only books it holds that match")
+                .contains("Do not add a book, an author or a number to it.");
+    }
+
+    @Test
+    void anEmptyCatalogueTellsTheModelToSaySoRatherThanSuggestSomething() {
+        String prompt = AnthropicAiChatService.systemPrompt(
+                MEMBER.withCatalogue(new CatalogueLookup(CatalogueIntent.TITLE, "dune", List.of())));
+
+        assertThat(prompt)
+                .contains("It holds nothing matching")
+                .contains("do not suggest a book you were not given");
+    }
+
+    @Test
+    void aQuestionWithNoCatalogueLookupSendsNoBookSection() {
+        String prompt = AnthropicAiChatService.systemPrompt(MEMBER);
+
+        assertThat(prompt)
+                .doesNotContain("the only books it holds")
+                .doesNotContain("It holds nothing matching");
+    }
+
+    @Test
+    void thePromptCarriesNoOneElsesDataEvenWithACatalogue() {
+        String prompt = AnthropicAiChatService.systemPrompt(
+                withBooks(new BookFact("Dune", "Frank Herbert", "Science Fiction", "978", 0, 3)));
+
+        assertThat(prompt)
+                .as("a catalogue entry and two counts - never who has the copies")
+                .doesNotContain("@")
+                .doesNotContain("$2a$")
+                .doesNotContain("ROLE_")
+                .doesNotContain("borrower")
+                .doesNotContain("21");
     }
 
     @Test

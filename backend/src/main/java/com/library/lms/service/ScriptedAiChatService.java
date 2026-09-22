@@ -81,10 +81,18 @@ public class ScriptedAiChatService implements AiChatService {
             return UNKNOWN;
         }
 
+        String library = context.libraryName() == null ? "your library" : context.libraryName();
+
+        // A catalogue question was recognised and looked up before this was
+        // called. The books are read out exactly as they were found: this
+        // assistant states what the library holds and never adds to it.
+        if (context.hasCatalogue()) {
+            return catalogueAnswer(context.catalogue(), library);
+        }
+
         // Padded so a keyword like "hi" matches the word and not the middle of
         // "this", and lowercased so matching does not depend on how it was typed.
         String asked = " " + message.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").trim() + " ";
-        String library = context.libraryName() == null ? "your library" : context.libraryName();
 
         for (Answer answer : SCRIPT) {
             if (answer.matches(asked)) {
@@ -93,6 +101,30 @@ public class ScriptedAiChatService implements AiChatService {
         }
 
         return UNKNOWN;
+    }
+
+    /**
+     * What the library holds, in a sentence.
+     *
+     * <p>Nothing is added to what the lookup found. An empty result says so
+     * plainly rather than offering something else, because a library not
+     * holding a book is a fact worth stating exactly.</p>
+     */
+    private static String catalogueAnswer(CatalogueLookup lookup, String library) {
+        if (lookup.empty()) {
+            return "I could not find anything matching \"" + lookup.term() + "\" in " + library
+                    + ". Staff at the desk can check for you, or order it in.";
+        }
+
+        StringBuilder answer = new StringBuilder(library).append(" has ")
+                .append(lookup.books().size() == 1 ? "one match" : lookup.books().size() + " matches")
+                .append(" for \"").append(lookup.term()).append("\":");
+
+        for (BookFact book : lookup.books()) {
+            answer.append("\n- ").append(book.describe());
+        }
+
+        return answer.toString();
     }
 
     /** One scripted answer and the keywords that reach it. */

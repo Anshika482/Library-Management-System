@@ -179,13 +179,15 @@ class FlywayMigrationIntegrationTest {
                         "4 | password reset tokens | SQL | true",
                         "5 | audit events | SQL | true",
                         "6 | audit loan actions | SQL | true",
-                        "7 | payments | SQL | true");
+                        "7 | payments | SQL | true",
+                        "8 | digital resources | SQL | true");
 
         assertThat(jdbcTemplate.queryForList(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = ? ORDER BY table_name",
                 String.class, MIGRATED))
-                .containsExactly("audit_events", "books", "categories", "flyway_schema_history", "libraries",
-                        "password_reset_tokens", "payments", "refresh_tokens", "transactions", "users");
+                .containsExactly("audit_events", "books", "categories", "digital_resources", "flyway_schema_history",
+                        "libraries", "password_reset_tokens", "payments", "refresh_tokens", "transactions",
+                        "users");
     }
 
     @Test

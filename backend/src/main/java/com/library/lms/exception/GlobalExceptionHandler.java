@@ -1067,6 +1067,49 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(errorResponse);
     }
 
+    /**
+     * Handles a digital resource the caller's library does not have.
+     *
+     * <p>404 for three different situations: no such resource, one belonging to
+     * another library, and one that is disabled when a member asks. Giving them
+     * separate answers would let a caller map the ids of libraries they cannot
+     * see, and learn which resources a library has chosen to hide.</p>
+     *
+     * @param exception the refusal, whose message names only the id that was asked for
+     * @return 404
+     */
+    @ExceptionHandler(DigitalResourceNotFoundException.class)
+    public ResponseEntity<ErrorResponse> handleDigitalResourceNotFound(
+            DigitalResourceNotFoundException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.NOT_FOUND.value(),
+                exception.getMessage(),
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(errorResponse);
+    }
+
+    /**
+     * Handles a member trying to change a library's digital resources.
+     *
+     * <p>The same fixed literal as the other service-level refusals, for the
+     * same reason: the response says nothing about the resource, or whether
+     * one with that id exists.</p>
+     *
+     * @param exception the refusal, deliberately never read
+     * @return 403 with a message that describes nothing
+     */
+    @ExceptionHandler(DigitalResourceAccessDeniedException.class)
+    public ResponseEntity<ErrorResponse> handleDigitalResourceAccessDenied(
+            DigitalResourceAccessDeniedException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.FORBIDDEN.value(),
+                "Access denied",
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(errorResponse);
+    }
+
     @ExceptionHandler(AuditAccessDeniedException.class)
     public ResponseEntity<ErrorResponse> handleAuditAccessDenied(AuditAccessDeniedException exception) {
         ErrorResponse errorResponse = new ErrorResponse(

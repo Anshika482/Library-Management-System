@@ -17,6 +17,7 @@ Built with Spring Boot 3.5 on Java 21, MySQL 8, Flyway and JWT authentication.
 - [Health probes](#health-probes)
 - [Authentication](#authentication)
 - [Endpoints](#endpoints)
+- [Digital resources](#digital-resources)
 - [Paying a fine by card](#paying-a-fine-by-card)
 - [Assistant](#assistant)
 - [Audit log](#audit-log)
@@ -31,6 +32,8 @@ Built with Spring Boot 3.5 on Java 21, MySQL 8, Flyway and JWT authentication.
   to the caller's library.
 - **Roles** - `ROLE_ADMIN` and `ROLE_LIBRARIAN` (staff), and `ROLE_MEMBER`.
 - **Catalogue** - books and categories with search, filters, sorting and pagination.
+- **Digital resources** - PDFs, EPUBs, videos and links attached to a book, managed by staff and read by members;
+  stored as URLs, never as files.
 - **Lending** - staff issue books to members and take them back; overdue loans are detected from their due date and
   fined per day; staff record fine payments.
 - **Accounts** - administrators create members and librarians, enable, disable, lock and unlock accounts, and register
@@ -195,6 +198,7 @@ starts; Hibernate then only validates the schema.
 | `V5__audit_events.sql` | `audit_events`, the audit log: ids, action names and times only |
 | `V6__audit_loan_actions.sql` | Widens the audit action and target enums to cover loans and fines |
 | `V7__payments.sql` | `payments`, one row per online fine payment attempt: references, amount and status |
+| `V8__digital_resources.sql` | `digital_resources`, what a library offers to read online: a URL, never a file |
 
 - The database must already exist, and the account needs rights to create and alter tables in it.
 - An applied migration is never edited: Flyway checksums it and refuses to start if it changed. A schema change is a new
@@ -336,6 +340,9 @@ and `direction`.
 | `POST /api/libraries` with `{"name", "admin": {"username", "email", "password"}}` | admin |
 | `GET /api/audit-events` - the library's audit log | admin |
 | `POST /api/chat` with `{"message"}` - asks the assistant a question | any account |
+| `GET /api/digital-resources`, `/api/digital-resources/{id}` | any account; members see enabled only |
+| `POST /api/digital-resources`; `PUT` and `DELETE /api/digital-resources/{id}` | admin, librarian |
+| `PATCH /api/digital-resources/{id}/status` with `{"enabled"}` | admin, librarian |
 
 An administrator cannot disable or lock their own account.
 
@@ -350,6 +357,26 @@ block, so the owner can sign in straight away. An administrator may reset any ac
 own (400 - use `POST /api/auth/password`, which asks for the current password); a librarian may reset members only
 (403 for staff); members may reset nobody's. Another library's account is a 404, and neither the password nor its hash
 is ever returned or logged.
+
+## Digital resources
+
+A library can attach things to read or watch online to any book in its catalogue: `POST /api/digital-resources`
+with `{"bookId", "title", "description", "resourceType", "resourceUrl", "enabled"}`. `resourceType` is `PDF`,
+`EPUB`, `VIDEO` or `LINK`.
+
+- **A reference, never a file.** `resourceUrl` points at wherever the thing is hosted. No file bytes are stored:
+  the database holds a URL, and no column exists for anything else. Where files live is a separate decision this
+  application has not made yet.
+- **The URL must be `http://` or `https://`.** Anything else - `javascript:`, `data:`, `file:` - is refused at the
+  request boundary and again in the service, because a stored link is eventually followed by a browser.
+- **Staff write, members read.** Administrators and librarians manage their own library's resources; members may
+  only see the enabled ones. Nothing is public.
+- **Disabled means invisible, not deleted.** `PATCH /api/digital-resources/{id}/status` turns a resource off when a
+  licence lapses or a link rots. A member's list skips it and a direct read answers 404 - the same answer an id that
+  never existed gets, so turning one off does not advertise that it is there. Staff still see it.
+- **One library only.** Every lookup names the caller's library, so a resource or a book of another library answers
+  404 whoever asks. The list is paged like the rest of the API: `page` from 0, `size` 1 to 50, and `sortBy` one of
+  `id`, `title`, `resourceType`, `createdAt` or `updatedAt`; `bookId` narrows it to one book.
 
 ## Paying a fine by card
 
@@ -418,6 +445,13 @@ returns `{"reply", "assistant", "answeredAt"}`.
 - **Scoped to the caller's library.** The library, account and role an assistant is given come from the
   authenticated account, never from the request, so a question naming another library is still answered for the
   caller's own. A request body carries nothing but the message.
+- **Catalogue questions are answered from the catalogue.** Questions about a title, an author, a category,
+  availability or a book's details are recognised and looked up in the caller's own library *before* any assistant
+  is called. The assistant is handed at most five matching books - title, author, category, ISBN and the two copy
+  counts - and nothing else: it holds no repository, so it cannot widen the search, reach another library's shelves,
+  or read a field it was not given. Loans, members and fines are never queried, so no answer can carry them.
+- **An empty shelf is an answer.** When the library holds nothing matching, the assistant is told so and says so;
+  both providers are instructed not to suggest a book they were not given.
 - **Nothing sensitive goes in or out.** An answer never repeats the question back and carries no password, hash,
   token, role or account detail. The question itself is not logged - the log records that an account asked
   something, by id.

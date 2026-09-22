@@ -129,13 +129,50 @@ public class AnthropicAiChatService implements AiChatService {
                 how overdue fines are worked out and paid, and how someone changes or resets their password.
 
                 Rules you must follow:
-                - You have been given no library records at all. You cannot look anything up.
-                - Never state a specific fine amount, due date, opening hour, address, phone number, or \
-                whether a particular book is available. You do not know them. Say the person should ask staff.
+                - You can look nothing up. The only library records you have are the ones below, if any.
+                - Never state a specific fine amount, due date, opening hour, address or phone number. \
+                You do not know them. Say the person should ask staff.
                 - Never say anything about another member, their loans, their fines or their account.
                 - If a question is not about this library, say you cannot help with it.
                 - Answer in at most three short sentences, in plain language.
-                """.formatted(library, audience(context.role()));
+                %s""".formatted(library, audience(context.role()), catalogue(context));
+    }
+
+    /**
+     * The books this library holds, when the question was about the catalogue.
+     *
+     * <p>Looked up by {@code BookIntelligenceService} before this class was
+     * called, from the caller's own library. The model is told these are the
+     * only records it has and that it must not add to them - a model asked
+     * about a book will otherwise happily describe one that does not
+     * exist.</p>
+     */
+    private static String catalogue(ChatContext context) {
+        if (!context.hasCatalogue()) {
+            return "";
+        }
+
+        CatalogueLookup lookup = context.catalogue();
+        if (lookup.empty()) {
+            return """
+
+                    The person searched this library's catalogue for "%s". It holds nothing matching. \
+                    Tell them so plainly and suggest asking staff; do not suggest a book you were not given.\
+                    """.formatted(lookup.term());
+        }
+
+        StringBuilder books = new StringBuilder("""
+
+                This library's catalogue was searched for "%s". These are the only books it holds that match, \
+                and the only ones you may mention:
+                """.formatted(lookup.term()));
+
+        for (BookFact book : lookup.books()) {
+            books.append("- ").append(book.describe()).append("\n");
+        }
+
+        return books.append("Answer only from this list. Do not add a book, an author or a number to it.")
+                .toString();
     }
 
     /** How the model should think of whoever is asking. */

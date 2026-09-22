@@ -40,11 +40,14 @@ class ChatServiceTest {
 
     private final ChatContextResolver contextResolver = mock(ChatContextResolver.class);
 
-    private final ChatService service = new ChatService(assistant, contextResolver);
+    private final BookIntelligenceService bookIntelligence = mock(BookIntelligenceService.class);
+
+    private final ChatService service = new ChatService(assistant, contextResolver, bookIntelligence);
 
     @BeforeEach
     void stub() {
         when(contextResolver.resolve("member")).thenReturn(MEMBER);
+        when(bookIntelligence.lookup(anyString(), any())).thenReturn(java.util.Optional.empty());
         when(assistant.name()).thenReturn("scripted");
         when(assistant.reply(anyString(), any(ChatContext.class))).thenReturn("An answer.");
     }
@@ -55,9 +58,36 @@ class ChatServiceTest {
     void theContextIsResolvedBeforeTheAssistantIsAsked() {
         service.reply("hello", "member");
 
-        InOrder order = inOrder(contextResolver, assistant);
+        InOrder order = inOrder(contextResolver, bookIntelligence, assistant);
         order.verify(contextResolver).resolve("member");
+        order.verify(bookIntelligence).lookup("hello", 7L);
         order.verify(assistant).reply(eq("hello"), eq(MEMBER));
+    }
+
+    @Test
+    void aCatalogueLookupIsMadeInTheCallersLibraryAndHandedToTheAssistant() {
+        CatalogueLookup lookup = new CatalogueLookup(CatalogueIntent.TITLE, "dune",
+                java.util.List.of(new BookFact("Dune", "Frank Herbert", "Science Fiction", "978", 2, 3)));
+        when(bookIntelligence.lookup("do you have Dune", 7L)).thenReturn(java.util.Optional.of(lookup));
+
+        service.reply("do you have Dune", "member");
+
+        org.mockito.ArgumentCaptor<ChatContext> given = org.mockito.ArgumentCaptor.forClass(ChatContext.class);
+        verify(assistant).reply(eq("do you have Dune"), given.capture());
+
+        assertThat(given.getValue().hasCatalogue()).isTrue();
+        assertThat(given.getValue().catalogue().books()).hasSize(1);
+        assertThat(given.getValue().libraryId()).as("the caller's own library").isEqualTo(7L);
+    }
+
+    @Test
+    void aQuestionThatIsNotAboutTheCatalogueCarriesNoBooks() {
+        service.reply("how do I pay a fine?", "member");
+
+        org.mockito.ArgumentCaptor<ChatContext> given = org.mockito.ArgumentCaptor.forClass(ChatContext.class);
+        verify(assistant).reply(anyString(), given.capture());
+
+        assertThat(given.getValue().hasCatalogue()).isFalse();
     }
 
     @Test

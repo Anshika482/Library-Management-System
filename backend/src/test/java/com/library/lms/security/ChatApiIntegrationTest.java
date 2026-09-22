@@ -21,9 +21,11 @@ import org.springframework.test.web.servlet.MvcResult;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.library.lms.entity.Book;
 import com.library.lms.entity.Library;
 import com.library.lms.entity.Role;
 import com.library.lms.entity.User;
+import com.library.lms.repository.BookRepository;
 import com.library.lms.repository.LibraryRepository;
 import com.library.lms.repository.UserRepository;
 
@@ -72,9 +74,14 @@ class ChatApiIntegrationTest {
     private UserRepository userRepository;
 
     @Autowired
+    private BookRepository bookRepository;
+
+    @Autowired
     private PasswordEncoder passwordEncoder;
 
     private Library libraryA;
+    private Book bookOfA;
+    private Book bookOfB;
     private User memberA;
     private User librarianA;
     private User adminA;
@@ -93,10 +100,25 @@ class ChatApiIntegrationTest {
         libraryA = persistLibrary(libraryAName);
         Library libraryB = persistLibrary(libraryBName = "Chat Library B " + suffix);
 
+        bookOfA = persistBook(libraryA, "The Silent Tide", "Mara Elling", suffix + "a", 2, 3);
+        bookOfB = persistBook(libraryB, "The Distant Shore", "Nils Aker", suffix + "b", 1, 1);
+
         memberA = persistUser(libraryA, "chat-" + suffix + "-member-a", Role.ROLE_MEMBER);
         librarianA = persistUser(libraryA, "chat-" + suffix + "-librarian-a", Role.ROLE_LIBRARIAN);
         adminA = persistUser(libraryA, "chat-" + suffix + "-admin-a", Role.ROLE_ADMIN);
         memberB = persistUser(libraryB, "chat-" + suffix + "-member-b", Role.ROLE_MEMBER);
+    }
+
+    private Book persistBook(Library library, String title, String author, String isbn, int available,
+            int total) {
+        Book book = new Book();
+        book.setTitle(title);
+        book.setAuthor(author);
+        book.setIsbn("chat-" + isbn);
+        book.setAvailableCopies(available);
+        book.setTotalCopies(total);
+        book.setLibrary(library);
+        return bookRepository.save(book);
     }
 
     private Library persistLibrary(String name) {
@@ -288,5 +310,87 @@ class ChatApiIntegrationTest {
         String again = json(ask("How do I pay a fine?", memberA)).path("reply").asText();
 
         assertThat(again).isEqualTo(first);
+    }
+
+    // ---------- catalogue questions are answered from the catalogue ----------
+
+    @Test
+    void aTitleQuestionIsAnsweredFromTheCallersOwnLibrary() throws Exception {
+        String reply = json(ask("Do you have The Silent Tide?", memberA)).path("reply").asText();
+
+        assertThat(reply)
+                .contains("The Silent Tide")
+                .contains("Mara Elling")
+                .contains("2 of 3 copies available now");
+    }
+
+    @Test
+    void anAuthorQuestionFindsThatAuthorsBooks() throws Exception {
+        assertThat(json(ask("What books do you have by Mara Elling?", memberA)).path("reply").asText())
+                .contains("The Silent Tide");
+    }
+
+    @Test
+    void anAvailabilityQuestionReportsTheCopiesOnTheShelf() throws Exception {
+        assertThat(json(ask("Is The Silent Tide available?", memberA)).path("reply").asText())
+                .contains("2 of 3 copies available now");
+    }
+
+    @Test
+    void aBookThisLibraryDoesNotHoldIsSaidToBeMissingRatherThanInvented() throws Exception {
+        String reply = json(ask("Do you have The Book Of Nowhere?", memberA)).path("reply").asText();
+
+        assertThat(reply)
+                .contains("could not find")
+                .doesNotContain("The Silent Tide");
+    }
+
+    @Test
+    void anotherLibrarysBookIsNeverFound() throws Exception {
+        String reply = json(ask("Do you have " + bookOfB.getTitle() + "?", memberA)).path("reply").asText();
+
+        assertThat(reply)
+                .as("B's shelves are invisible to A's members, however the question is phrased")
+                .contains("could not find")
+                .doesNotContain(bookOfB.getTitle())
+                .doesNotContain("Nils Aker");
+    }
+
+    @Test
+    void eachLibrarySeesOnlyItsOwnShelves() throws Exception {
+        assertThat(json(ask("Do you have " + bookOfA.getTitle() + "?", memberB)).path("reply").asText())
+                .doesNotContain(bookOfA.getTitle());
+        assertThat(json(ask("Do you have " + bookOfB.getTitle() + "?", memberB)).path("reply").asText())
+                .contains(bookOfB.getTitle());
+    }
+
+    @Test
+    void everyRoleCanAskTheCatalogue() throws Exception {
+        for (User account : List.of(memberA, librarianA, adminA)) {
+            assertThat(json(ask("Do you have The Silent Tide?", account)).path("reply").asText())
+                    .as(account.getUsername())
+                    .contains("The Silent Tide");
+        }
+    }
+
+    @Test
+    void aCatalogueAnswerCarriesNothingAboutAnyPerson() throws Exception {
+        String body = ask("Do you have The Silent Tide?", memberA).getResponse().getContentAsString();
+
+        assertThat(body)
+                .doesNotContain(PASSWORD)
+                .doesNotContain(encodedPassword)
+                .doesNotContain("$2a$")
+                .doesNotContain("eyJ")
+                .doesNotContain("ROLE_")
+                .doesNotContain(memberA.getUsername())
+                .doesNotContain(memberA.getEmail());
+    }
+
+    @Test
+    void aNonCatalogueQuestionStillGetsItsScriptedAnswer() throws Exception {
+        assertThat(json(ask("How do I pay a fine?", memberA)).path("reply").asText())
+                .as("the assistant's other answers are unaffected")
+                .contains("fine");
     }
 }

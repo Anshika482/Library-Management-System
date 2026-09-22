@@ -282,6 +282,17 @@ public class SecurityConfig {
                         // lock, and scopes the read to the caller's library.
                         .requestMatchers("/api/audit-events/**").hasAuthority(ADMIN)
 
+                        // Digital resources: staff of a library manage what it
+                        // offers to read online, and every signed-in account of
+                        // that library may read the enabled ones. The GET rule
+                        // is deliberately wider than the write rules, and
+                        // DigitalResourceService is the second lock on both -
+                        // it refuses a member's write and hides a disabled
+                        // resource from a member's read. Nothing here is public.
+                        .requestMatchers(HttpMethod.GET, "/api/digital-resources", "/api/digital-resources/*")
+                                .authenticated()
+                        .requestMatchers("/api/digital-resources/**").hasAnyAuthority(ADMIN, LIBRARIAN)
+
                         // The assistant answers any signed-in caller - a member
                         // asking about their fines, staff asking how a return
                         // works. Named explicitly rather than left to the
