@@ -282,6 +282,15 @@ public class SecurityConfig {
                         // lock, and scopes the read to the caller's library.
                         .requestMatchers("/api/audit-events/**").hasAuthority(ADMIN)
 
+                        // The assistant answers any signed-in caller - a member
+                        // asking about their fines, staff asking how a return
+                        // works. Named explicitly rather than left to the
+                        // catch-all below, so the rule for a new path is a
+                        // decision someone made rather than a default nobody
+                        // noticed. ChatService scopes every answer to the
+                        // caller's own library.
+                        .requestMatchers(HttpMethod.POST, "/api/chat").authenticated()
+
                         .anyRequest().authenticated())
                 .exceptionHandling(exceptions -> exceptions
                         .authenticationEntryPoint(restAuthenticationEntryPoint)

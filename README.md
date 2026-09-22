@@ -18,6 +18,7 @@ Built with Spring Boot 3.5 on Java 21, MySQL 8, Flyway and JWT authentication.
 - [Authentication](#authentication)
 - [Endpoints](#endpoints)
 - [Paying a fine by card](#paying-a-fine-by-card)
+- [Assistant](#assistant)
 - [Audit log](#audit-log)
 - [Provisioning the first library and administrator](#provisioning-the-first-library-and-administrator)
 - [CORS](#cors)
@@ -325,6 +326,7 @@ and `direction`.
 | `POST /api/users/{userId}/password-reset` with `{"newPassword"}` | admin: any account; librarian: members only |
 | `POST /api/libraries` with `{"name", "admin": {"username", "email", "password"}}` | admin |
 | `GET /api/audit-events` - the library's audit log | admin |
+| `POST /api/chat` with `{"message"}` - asks the assistant a question | any account |
 
 An administrator cannot disable or lock their own account.
 
@@ -381,6 +383,25 @@ also be paid by card, in two steps, by the member who owes it or by staff on the
   is refused with 503 and fines are taken at the desk instead. A provider that cannot be reached, refuses the order
   or answers without one is also a 503, and the response repeats nothing the provider said. Both providers sit
   behind the `PaymentGateway` interface, so adding a third is one implementation and a change of credentials.
+
+## Assistant
+
+`POST /api/chat` with `{"message": "How do I pay a fine?"}` answers one question for any signed-in account, and
+returns `{"reply", "assistant", "answeredAt"}`.
+
+- **Scripted for now.** The assistant behind the endpoint matches keywords against a fixed script and reads no data
+  at all: the same question always gets the same answer, and anything it does not recognise is declined rather than
+  guessed at. No AI provider is called, and none is configured.
+- **Swappable.** Everything above the `AiChatService` interface - the endpoint, validation, the library context,
+  the error handling - is independent of what answers, so a real provider is one new implementation.
+- **Scoped to the caller's library.** The library, account and role an assistant is given come from the
+  authenticated account, never from the request, so a question naming another library is still answered for the
+  caller's own. A request body carries nothing but the message.
+- **Nothing sensitive goes in or out.** An answer never repeats the question back and carries no password, hash,
+  token, role or account detail. The question itself is not logged - the log records that an account asked
+  something, by id.
+- **Bounded.** A missing, blank or over-1000-character message is refused with 400; an anonymous caller gets 401
+  without the assistant being reached.
 
 ## Audit log
 
