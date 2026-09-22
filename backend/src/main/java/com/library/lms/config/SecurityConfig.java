@@ -266,6 +266,13 @@ public class SecurityConfig {
                         // never attached to the library it creates.
                         .requestMatchers("/api/libraries/**").hasAuthority(ADMIN)
 
+                        // The audit log is administrators only, for every verb
+                        // on the path. No method is named, so GET and the HEAD
+                        // Spring MVC serves from it are both covered, and so is
+                        // anything added here later. AuditService is the second
+                        // lock, and scopes the read to the caller's library.
+                        .requestMatchers("/api/audit-events/**").hasAuthority(ADMIN)
+
                         .anyRequest().authenticated())
                 .exceptionHandling(exceptions -> exceptions
                         .authenticationEntryPoint(restAuthenticationEntryPoint)

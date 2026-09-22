@@ -967,6 +967,26 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(errorResponse);
     }
 
+    /**
+     * Handles a librarian or member asking to read the audit log.
+     *
+     * <p>The log is an administrator's view of their own library. The same
+     * fixed literal as the refusals above, for the same reason: the response
+     * says nothing about what the log holds, or whether it holds anything.</p>
+     *
+     * @param exception the refusal, deliberately never read
+     * @return 403 with a message that describes nothing about the log
+     */
+    @ExceptionHandler(AuditAccessDeniedException.class)
+    public ResponseEntity<ErrorResponse> handleAuditAccessDenied(AuditAccessDeniedException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.FORBIDDEN.value(),
+                "Access denied",
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(errorResponse);
+    }
+
     @ExceptionHandler(AuthenticationException.class)
     public ResponseEntity<ErrorResponse> handleAuthenticationFailure(AuthenticationException exception) {
         ErrorResponse errorResponse = new ErrorResponse(

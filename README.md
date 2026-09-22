@@ -36,7 +36,7 @@ Built with Spring Boot 3.5 on Java 21, MySQL 8, Flyway and JWT authentication.
 - **Security** - JWT access tokens with rotating refresh tokens, login rate limiting, configurable CORS, and startup
   checks that refuse unsafe production configuration.
 - **Audit log** - every change to accounts, passwords and libraries is recorded in its library's audit log, refusals
-  included.
+  included, and read back by an administrator through `GET /api/audit-events`.
 
 ## Technology
 
@@ -280,6 +280,7 @@ and `direction`.
 | `PATCH /api/users/{userId}/status` - enables, disables, locks or unlocks an account | admin |
 | `POST /api/users/{userId}/password-reset` with `{"newPassword"}` | admin: any account; librarian: members only |
 | `POST /api/libraries` with `{"name", "admin": {"username", "email", "password"}}` | admin |
+| `GET /api/audit-events` - the library's audit log | admin |
 
 An administrator cannot disable or lock their own account.
 
@@ -320,6 +321,26 @@ Changes to accounts, passwords and libraries are recorded in `audit_events`: who
 - **Actor.** The signed-in account that made the change. Self-service resets and the startup bootstrap have none.
 - **Not recorded:** reads, and attempts that name no existing account (an unknown email or reset token), which have no
   library to belong to. A member stopped by the security rules never reaches the code that records.
+
+### Reading the log
+
+`GET /api/audit-events` returns one page of the caller's own library's events, newest first. Administrators only:
+librarians and members get 403, and a caller with no token gets 401.
+
+Each event carries `id`, `action`, `outcome`, `actorUserId`, `targetType`, `targetId` and `occurredAt` - the row as
+it is stored, with nothing added. Pages work as everywhere else in the API: `page` from 0, `size` 10 by default and 50
+at most, and `sortBy` accepts `occurredAt` or `id` only, with `direction` `asc` or `desc`.
+
+| Filter | Matches |
+|---|---|
+| `action` | one action name, such as `PASSWORD_RESET_BY_STAFF` |
+| `outcome` | `SUCCESS` or `FAILURE` |
+| `actorUserId` | everything one account did |
+| `targetType` with `targetId` | everything done to one user or library |
+| `from`, `to` | events at or after, and at or before, an ISO date-time such as `2026-09-20T09:30:00` |
+
+Every filter given must match, and all of them narrow within the caller's library: an actor or target belonging to
+another library matches nothing rather than reaching across. Reading the log is not itself recorded.
 
 ## Provisioning the first library and administrator
 
@@ -382,7 +403,8 @@ on GitHub.
   revoked before they expire, even by logout or a password change.
 - **Refresh-token records** outlive their session by `JWT_REFRESH_TOKEN_RETENTION`, so that reuse of an old
   token is still recognised, and are then swept away. Every instance runs the sweep.
-- **Audit log** has no API yet: events are recorded and kept, but read only from the database. Nothing purges them.
+- **Audit log** is read through `GET /api/audit-events` by an administrator of the library it belongs to; there is no
+  export, and nothing purges old events.
 - **Reset links are not delivered yet.** Forgot-password issues tokens, but no email is sent, so until a sender is
   added a forgotten password is reset by staff with `POST /api/users/{userId}/password-reset`.
 - **Forgot-password queue.** Issuing runs on one background thread with room for 500 waiting requests; beyond
