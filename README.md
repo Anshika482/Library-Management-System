@@ -17,6 +17,7 @@ Built with Spring Boot 3.5 on Java 21, MySQL 8, Flyway and JWT authentication.
 - [Health probes](#health-probes)
 - [Authentication](#authentication)
 - [Endpoints](#endpoints)
+- [Paying a fine by card](#paying-a-fine-by-card)
 - [Audit log](#audit-log)
 - [Provisioning the first library and administrator](#provisioning-the-first-library-and-administrator)
 - [CORS](#cors)
@@ -118,7 +119,9 @@ start when:
   `VERIFY_IDENTITY`), allows public key retrieval, creates the database on demand, or carries a password;
 - `DB_USERNAME` is missing (`root` is allowed, with a warning);
 - Hibernate is allowed to change the schema (anything but `validate` or `none`);
-- the JVM's time zone differs from `APP_TIME_ZONE`, or date-times would not be stored in UTC.
+- the JVM's time zone differs from `APP_TIME_ZONE`, or date-times would not be stored in UTC;
+- `PAYMENT_GATEWAY_PROVIDER` is not `razorpay`, or its key id or secret is missing. The sandbox gateway marks fines
+  paid while no money moves, and nothing inside the application would notice, so production refuses to start on it.
 
 ## Environment variables
 
@@ -148,6 +151,13 @@ start when:
 | `MAIL_FROM` | production | `MAIL_USERNAME` | Address reset messages come from |
 | `MAIL_STARTTLS` | no | `true` | Upgrade the SMTP connection to TLS |
 | `APP_RESET_LINK_BASE_URL` | production | empty - nothing sent | Page the reset link points to; the token is added to it |
+| `PAYMENT_GATEWAY_KEY_ID` | no | empty - no online payment | Razorpay key id; public, sent to the browser |
+| `PAYMENT_GATEWAY_KEY_SECRET` | no | empty - no online payment | Razorpay key secret; opens orders and verifies signatures, never published |
+| `PAYMENT_GATEWAY_PROVIDER` | no | `hmac-sandbox` | `razorpay`, or `hmac-sandbox` for local development; anything else stops startup |
+| `PAYMENT_GATEWAY_BASE_URL` | no | `https://api.razorpay.com` | Razorpay's API host; overridden only to point at a stub |
+| `PAYMENT_GATEWAY_CONNECT_TIMEOUT` | no | `PT3S` | How long to wait for a connection to the provider; zero or less is refused |
+| `PAYMENT_GATEWAY_READ_TIMEOUT` | no | `PT8S` | How long to wait for its answer; zero or less is refused |
+| `PAYMENT_CURRENCY` | no | `INR` | Currency fines are charged in, ISO 4217 |
 | `BOOTSTRAP_ADMIN_LIBRARY` | first start | - | Name of the first library, created when there are no accounts |
 | `BOOTSTRAP_ADMIN_USERNAME` | first start | - | Username of its first administrator |
 | `BOOTSTRAP_ADMIN_EMAIL` | first start | - | Email of its first administrator |
@@ -174,6 +184,7 @@ starts; Hibernate then only validates the schema.
 | `V4__password_reset_tokens.sql` | `password_reset_tokens`, which holds reset-token hashes, never tokens |
 | `V5__audit_events.sql` | `audit_events`, the audit log: ids, action names and times only |
 | `V6__audit_loan_actions.sql` | Widens the audit action and target enums to cover loans and fines |
+| `V7__payments.sql` | `payments`, one row per online fine payment attempt: references, amount and status |
 
 - The database must already exist, and the account needs rights to create and alter tables in it.
 - An applied migration is never edited: Flyway checksums it and refuses to start if it changed. A schema change is a new
@@ -302,6 +313,8 @@ and `direction`.
 | `POST /api/transactions/issue` with `{"bookId", "memberId", "dueDate"}` | admin, librarian |
 | `POST /api/transactions/{id}/return` | admin, librarian |
 | `POST /api/transactions/{id}/fine-payment` - records a payment taken by staff | admin, librarian |
+| `POST /api/transactions/{id}/payment-order` - opens a card payment for a fine | the loan's member, or staff |
+| `POST /api/transactions/{id}/payment-verification` - settles it once verified | the loan's member, or staff |
 | `GET /api/transactions/{id}`, `/api/transactions/user/{userId}` | staff; members see only their own |
 | `GET /api/transactions/book/{bookId}`, `/api/transactions/status/{status}` | admin, librarian |
 | `GET /api/users/me` - your own account, including the id other calls need | any account |
@@ -326,6 +339,48 @@ block, so the owner can sign in straight away. An administrator may reset any ac
 own (400 - use `POST /api/auth/password`, which asks for the current password); a librarian may reset members only
 (403 for staff); members may reset nobody's. Another library's account is a 404, and neither the password nor its hash
 is ever returned or logged.
+
+## Paying a fine by card
+
+A fine can be settled at the desk, unchanged, with `POST /api/transactions/{id}/fine-payment` - staff only. It can
+also be paid by card, in two steps, by the member who owes it or by staff on their behalf:
+
+1. **Open an order** - `POST /api/transactions/{id}/payment-order` answers with the provider's order reference, the
+   amount, the currency and the public merchant key. Asking again while an order is still open returns that same
+   order rather than a second one. The fine must be outstanding: a book still out, a fine already paid or nothing
+   owed is refused with the same 409 the desk endpoint gives.
+2. **Verify what came back** - `POST /api/transactions/{id}/payment-verification` with
+   `{"providerOrderId", "providerPaymentId", "signature"}`. The signature is recomputed on the server with
+   `PAYMENT_GATEWAY_KEY_SECRET` and must be the provider's over exactly those two references. Only then is the fine
+   marked `PAID`, and only then is a `FINE_PAID` audit event recorded.
+
+- **Nothing is believed without verification.** A client claiming a payment succeeded changes nothing. A signature
+  that does not match is a 400 that says only that the payment could not be verified - never which part was wrong -
+  and the attempt is stored as a failed payment.
+- **Paying twice is refused in three places**: the fine's own state, a loan that already has a succeeded payment, and
+  unique provider references in the database. Sending the same verified payment again returns the same answer and
+  changes nothing - no second settlement, no second audit event.
+- **Library-scoped and owned.** A loan of another library is not found; a loan of another member is refused to
+  members and allowed to that library's staff.
+- **No card data anywhere.** The card is entered on the provider's pages. This application receives, logs and stores
+  only the provider's two references, an amount and a status - there is no column, field or log line for a number,
+  expiry, CVV or holder name.
+- **Production runs the real provider or does not start.** The sandbox is the default because development and CI
+  have no merchant account; under the `prod` profile a missing, blank or non-`razorpay` provider, or a missing key
+  id or secret, stops startup.
+- **The provider is given a short, configurable window.** `PAYMENT_GATEWAY_CONNECT_TIMEOUT` (default `PT3S`) and
+  `PAYMENT_GATEWAY_READ_TIMEOUT` (default `PT8S`) bound every call; a zero or negative value is refused at startup.
+  The call happens inside the transaction that writes the payment row, so a provider that goes quiet would otherwise
+  hold a database connection for as long as it liked.
+- **Two providers, one flow.** `PAYMENT_GATEWAY_PROVIDER=razorpay` opens each order server-side on Razorpay's
+  Orders API (`POST /v1/orders`, merchant credentials in an `Authorization` header, amount in paise) and verifies
+  the `razorpay_signature` it returns. `hmac-sandbox`, the default, opens the order in process and makes exactly the
+  same signature check, so development and the tests exercise the real flow without a merchant account. A provider
+  name nobody implements stops startup rather than quietly falling back to the sandbox.
+- **Unconfigured means unavailable.** With `PAYMENT_GATEWAY_KEY_ID` or `PAYMENT_GATEWAY_KEY_SECRET` blank, an order
+  is refused with 503 and fines are taken at the desk instead. A provider that cannot be reached, refuses the order
+  or answers without one is also a 503, and the response repeats nothing the provider said. Both providers sit
+  behind the `PaymentGateway` interface, so adding a third is one implementation and a change of credentials.
 
 ## Audit log
 

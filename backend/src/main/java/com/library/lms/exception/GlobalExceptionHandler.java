@@ -977,6 +977,74 @@ public class GlobalExceptionHandler {
      * @param exception the refusal, deliberately never read
      * @return 403 with a message that describes nothing about the log
      */
+    /**
+     * Handles a payment whose answer did not verify.
+     *
+     * <p>One fixed sentence for every reason: a signature that is not the
+     * provider's, an order belonging to another library or another loan, or a
+     * payment reference that does not match the one that succeeded. Which of
+     * those it was is exactly what someone forging a payment needs, and it
+     * would let them find a working combination one field at a time. The fine
+     * is untouched, and the attempt is recorded as a failed payment.</p>
+     *
+     * @param exception the refusal, deliberately never read
+     * @return 400 with a message that describes nothing about what failed
+     */
+    @ExceptionHandler(PaymentVerificationFailedException.class)
+    public ResponseEntity<ErrorResponse> handlePaymentVerificationFailed(
+            PaymentVerificationFailedException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.BAD_REQUEST.value(),
+                "The payment could not be verified.",
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorResponse);
+    }
+
+    /**
+     * Handles an online payment asked for where no gateway is configured.
+     *
+     * <p>503 rather than 500: nothing is broken, the deployment simply has no
+     * provider credentials, and fines can still be recorded at the desk. The
+     * message names no setting - what is missing is a deployment's business,
+     * not a caller's.</p>
+     *
+     * @param exception the refusal, deliberately never read
+     * @return 503 with a message that names nothing about the configuration
+     */
+    @ExceptionHandler(PaymentGatewayNotConfiguredException.class)
+    public ResponseEntity<ErrorResponse> handlePaymentGatewayNotConfigured(
+            PaymentGatewayNotConfiguredException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.SERVICE_UNAVAILABLE.value(),
+                "Online payment is not available.",
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(errorResponse);
+    }
+
+    /**
+     * Handles a provider that could not be reached or would not open an order.
+     *
+     * <p>503, like the unconfigured case: the request was fine, the provider
+     * was not. The message repeats nothing the provider said - a payment
+     * provider's error text quotes the request back, and an error response is
+     * the last place that belongs. Fines can still be taken at the desk.</p>
+     *
+     * @param exception the failure, deliberately never read
+     * @return 503 with a message that carries nothing from the provider
+     */
+    @ExceptionHandler(PaymentGatewayUnavailableException.class)
+    public ResponseEntity<ErrorResponse> handlePaymentGatewayUnavailable(
+            PaymentGatewayUnavailableException exception) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.SERVICE_UNAVAILABLE.value(),
+                "Online payment is temporarily unavailable.",
+                LocalDateTime.now());
+
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(errorResponse);
+    }
+
     @ExceptionHandler(AuditAccessDeniedException.class)
     public ResponseEntity<ErrorResponse> handleAuditAccessDenied(AuditAccessDeniedException exception) {
         ErrorResponse errorResponse = new ErrorResponse(

@@ -102,6 +102,10 @@ jobs:
       # password reset links, so MAIL_* and APP_RESET_LINK_BASE_URL are set to
       # unroutable .invalid values. Nothing in this smoke test asks for a reset,
       # so no connection to them is ever attempted.
+      #
+      # It refuses the sandbox payment gateway too, so the provider is named
+      # with dummy CI-only Razorpay credentials. Nothing here asks to pay a
+      # fine, so Razorpay is never called.
       - name: Start the container with the production profile
         run: |
           docker run -d --name lms --network host \
@@ -115,6 +119,9 @@ jobs:
             -e BOOTSTRAP_ADMIN_USERNAME=ci-only-bootstrap-admin \
             -e BOOTSTRAP_ADMIN_EMAIL=ci-only-bootstrap-admin@example.invalid \
             -e BOOTSTRAP_ADMIN_PASSWORD=ci-only-bootstrap-password \
+            -e PAYMENT_GATEWAY_PROVIDER=razorpay \
+            -e PAYMENT_GATEWAY_KEY_ID=rzp_test_ci_only_key_id \
+            -e PAYMENT_GATEWAY_KEY_SECRET=ci-only-payment-secret-for-the-smoke-test \
             -e MAIL_HOST=smtp.ci-only.invalid \
             -e MAIL_FROM=ci-only-library@example.invalid \
             -e APP_RESET_LINK_BASE_URL=https://ci-only.invalid/reset-password \
