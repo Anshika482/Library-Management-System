@@ -78,7 +78,10 @@ public class ChatService {
         // And a second one, if the question was about the catalogue. The
         // assistant is handed what this found; it never queries anything
         // itself, and it cannot ask for another library's shelves.
-        context = bookIntelligence.lookup(message, context.libraryId())
+        // Whether disabled resources are visible follows the caller's role, as
+        // it does at the resource API - taken from the account, never from the
+        // question.
+        context = bookIntelligence.lookup(message, context.libraryId(), context.isStaff())
                 .map(context::withCatalogue)
                 .orElse(context);
 

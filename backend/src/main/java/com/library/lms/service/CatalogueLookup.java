@@ -15,18 +15,36 @@ import java.util.List;
  * genuinely holds nothing matching, and an assistant is expected to say so
  * rather than invent something.</p>
  *
- * @param intent what the question seemed to be about
- * @param term   what was searched for, as the caller wrote it
- * @param books  what the caller's own library holds, at most a handful
+ * <p><b>Resources hang off the books that matched.</b> They are the digital
+ * things attached to those books - a PDF, an EPUB, a video, a link - and a
+ * member is only ever given the enabled ones. Their text is written by staff
+ * rather than by this application, so whoever renders it treats it as data.</p>
+ *
+ * @param intent    what the question seemed to be about
+ * @param term      what was searched for, as the caller wrote it
+ * @param books     what the caller's own library holds, at most a handful
+ * @param resources what those books have to read online, at most a handful
  */
-public record CatalogueLookup(CatalogueIntent intent, String term, List<BookFact> books) {
+public record CatalogueLookup(CatalogueIntent intent, String term, List<BookFact> books,
+        List<ResourceFact> resources) {
 
     public CatalogueLookup {
         books = books == null ? List.of() : List.copyOf(books);
+        resources = resources == null ? List.of() : List.copyOf(resources);
     }
 
-    /** Whether the library held nothing matching. */
+    /** A lookup that found books and nothing to read online. */
+    public CatalogueLookup(CatalogueIntent intent, String term, List<BookFact> books) {
+        this(intent, term, books, List.of());
+    }
+
+    /** Whether the library held nothing matching at all. */
     public boolean empty() {
-        return books.isEmpty();
+        return books.isEmpty() && resources.isEmpty();
+    }
+
+    /** Whether any of the matching books had something to read online. */
+    public boolean hasResources() {
+        return !resources.isEmpty();
     }
 }

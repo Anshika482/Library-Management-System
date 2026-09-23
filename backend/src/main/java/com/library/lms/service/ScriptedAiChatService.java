@@ -124,6 +124,15 @@ public class ScriptedAiChatService implements AiChatService {
             answer.append("\n- ").append(book.describe());
         }
 
+        // What those books have to read online. A member was only given the
+        // enabled ones, so this cannot mention a resource they could not open.
+        if (lookup.hasResources()) {
+            answer.append("\n\nTo read online:");
+            for (ResourceFact resource : lookup.resources()) {
+                answer.append("\n- ").append(resource.describe());
+            }
+        }
+
         return answer.toString();
     }
 

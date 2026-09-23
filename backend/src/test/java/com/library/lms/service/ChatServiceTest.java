@@ -3,6 +3,7 @@ package com.library.lms.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
@@ -47,7 +48,7 @@ class ChatServiceTest {
     @BeforeEach
     void stub() {
         when(contextResolver.resolve("member")).thenReturn(MEMBER);
-        when(bookIntelligence.lookup(anyString(), any())).thenReturn(java.util.Optional.empty());
+        when(bookIntelligence.lookup(anyString(), any(), anyBoolean())).thenReturn(java.util.Optional.empty());
         when(assistant.name()).thenReturn("scripted");
         when(assistant.reply(anyString(), any(ChatContext.class))).thenReturn("An answer.");
     }
@@ -60,7 +61,7 @@ class ChatServiceTest {
 
         InOrder order = inOrder(contextResolver, bookIntelligence, assistant);
         order.verify(contextResolver).resolve("member");
-        order.verify(bookIntelligence).lookup("hello", 7L);
+        order.verify(bookIntelligence).lookup("hello", 7L, false);
         order.verify(assistant).reply(eq("hello"), eq(MEMBER));
     }
 
@@ -68,7 +69,7 @@ class ChatServiceTest {
     void aCatalogueLookupIsMadeInTheCallersLibraryAndHandedToTheAssistant() {
         CatalogueLookup lookup = new CatalogueLookup(CatalogueIntent.TITLE, "dune",
                 java.util.List.of(new BookFact("Dune", "Frank Herbert", "Science Fiction", "978", 2, 3)));
-        when(bookIntelligence.lookup("do you have Dune", 7L)).thenReturn(java.util.Optional.of(lookup));
+        when(bookIntelligence.lookup("do you have Dune", 7L, false)).thenReturn(java.util.Optional.of(lookup));
 
         service.reply("do you have Dune", "member");
 

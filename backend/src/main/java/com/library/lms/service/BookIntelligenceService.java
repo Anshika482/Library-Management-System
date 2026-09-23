@@ -1,18 +1,22 @@
 package com.library.lms.service;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.library.lms.entity.Book;
 import com.library.lms.entity.Category;
+import com.library.lms.entity.DigitalResource;
 import com.library.lms.repository.BookRepository;
 import com.library.lms.repository.BookSpecifications;
+import com.library.lms.repository.DigitalResourceRepository;
 
 /**
  * Works out whether a question is about the catalogue, and if so answers it
@@ -35,15 +39,25 @@ import com.library.lms.repository.BookSpecifications;
  * and not reachable from here, so no answer can carry them however a question
  * is phrased.</p>
  *
- * <p><b>Read-only and bounded.</b> At most {@value #MAX_BOOKS} books, so a
- * question cannot pull a whole catalogue into an answer - or into a provider's
- * request.</p>
+ * <p><b>Resources follow the books, and follow the same rules.</b> Whatever a
+ * matching book has to read online is looked up through the digital resource
+ * repository's own library-scoped finders - the enabled-only one for a member,
+ * the full one for staff, which is exactly what the resource API decides for
+ * each. A member therefore learns nothing here that they could not already see
+ * at {@code GET /api/digital-resources}.</p>
+ *
+ * <p><b>Read-only and bounded.</b> At most {@value #MAX_BOOKS} books and
+ * {@value #MAX_RESOURCES} resources, so a question cannot pull a whole
+ * catalogue into an answer - or into a provider's request.</p>
  */
 @Component
 public class BookIntelligenceService {
 
     /** The most books one answer may be built from. */
     static final int MAX_BOOKS = 5;
+
+    /** The most digital resources one answer may be built from, across every matching book. */
+    static final int MAX_RESOURCES = 5;
 
     /** Phrases that mean "what has this library got", with the words that introduce the thing sought. */
     private static final List<Trigger> TRIGGERS = List.of(
@@ -58,8 +72,11 @@ public class BookIntelligenceService {
 
     private final BookRepository bookRepository;
 
-    public BookIntelligenceService(BookRepository bookRepository) {
+    private final DigitalResourceRepository resourceRepository;
+
+    public BookIntelligenceService(BookRepository bookRepository, DigitalResourceRepository resourceRepository) {
         this.bookRepository = bookRepository;
+        this.resourceRepository = resourceRepository;
     }
 
     /**
@@ -68,11 +85,15 @@ public class BookIntelligenceService {
      *
      * @param message   the caller's question
      * @param libraryId the caller's own library, from their account
+     * @param staff     whether the caller may see resources their library has
+     *                  switched off - the same rule the resource API applies,
+     *                  and one that comes from their account rather than from
+     *                  anything in the question
      * @return the lookup, or empty when the question was not a catalogue one -
      *         in which case no query is run
      */
     @Transactional(readOnly = true)
-    public Optional<CatalogueLookup> lookup(String message, Long libraryId) {
+    public Optional<CatalogueLookup> lookup(String message, Long libraryId, boolean staff) {
         if (message == null || message.isBlank() || libraryId == null) {
             return Optional.empty();
         }
@@ -82,24 +103,73 @@ public class BookIntelligenceService {
         for (Trigger trigger : TRIGGERS) {
             Optional<String> term = trigger.termIn(asked);
             if (term.isPresent()) {
+                List<Book> books = books(trigger.intent(), term.get(), libraryId);
+
                 return Optional.of(new CatalogueLookup(trigger.intent(), term.get(),
-                        search(trigger.intent(), term.get(), libraryId)));
+                        books.stream().map(BookIntelligenceService::toFact).toList(),
+                        resourcesOf(books, libraryId, staff)));
             }
         }
 
         return Optional.empty();
     }
 
-    /** The caller's own library's books matching the term, as facts. */
-    private List<BookFact> search(CatalogueIntent intent, String term, Long libraryId) {
-        List<Book> books = intent == CatalogueIntent.CATEGORY
+    /** The caller's own library's books matching the term. */
+    private List<Book> books(CatalogueIntent intent, String term, Long libraryId) {
+        return intent == CatalogueIntent.CATEGORY
                 ? bookRepository.findByLibraryIdAndCategoryName(libraryId, term, PageRequest.of(0, MAX_BOOKS))
                         .getContent()
                 : bookRepository.findAll(
                         BookSpecifications.belongsToLibrary(libraryId).and(BookSpecifications.matchesKeyword(term)),
                         PageRequest.of(0, MAX_BOOKS)).getContent();
+    }
 
-        return books.stream().map(BookIntelligenceService::toFact).toList();
+    /**
+     * What those books have to read online, within the same library.
+     *
+     * <p>Two finders, chosen by who is asking: a member gets the enabled-only
+     * one, so a resource their library has switched off is as absent from an
+     * answer as it is from their own list at
+     * {@code GET /api/digital-resources}; staff get the view they have there
+     * too. Both name the library as well as the book, so neither can reach
+     * across - and the running total is what bounds the whole answer, not each
+     * book separately.</p>
+     */
+    private List<ResourceFact> resourcesOf(List<Book> books, Long libraryId, boolean staff) {
+        List<ResourceFact> facts = new ArrayList<>();
+
+        for (Book book : books) {
+            if (facts.size() >= MAX_RESOURCES) {
+                break;
+            }
+
+            Pageable page = PageRequest.of(0, MAX_RESOURCES - facts.size());
+            List<DigitalResource> resources = staff
+                    ? resourceRepository.findByLibraryIdAndBookId(libraryId, book.getId(), page).getContent()
+                    : resourceRepository.findByLibraryIdAndBookIdAndEnabledTrue(libraryId, book.getId(), page)
+                            .getContent();
+
+            for (DigitalResource resource : resources) {
+                // Checked here as well as in the page size: the bound on what
+                // reaches a prompt is this application's to keep, not something
+                // to delegate to a query honouring the size it was asked for.
+                if (facts.size() >= MAX_RESOURCES) {
+                    break;
+                }
+                facts.add(toFact(resource, book));
+            }
+        }
+
+        return List.copyOf(facts);
+    }
+
+    /** A resource, reduced to what an assistant may be told. No link, no id, no state. */
+    private static ResourceFact toFact(DigitalResource resource, Book book) {
+        return new ResourceFact(
+                book.getTitle(),
+                resource.getTitle(),
+                resource.getDescription(),
+                resource.getResourceType());
     }
 
     /** A book, reduced to what an assistant may be told. Nothing here comes from a person's record. */
